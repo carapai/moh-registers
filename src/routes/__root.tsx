@@ -6,6 +6,7 @@ import React from "react";
 import { Flex } from "antd";
 import { resourceQueryOptions } from "../query-options";
 import { Program, ProgramRule, ProgramRuleVariable } from "../schemas";
+import { TrackerContext } from "../machines/tracker";
 
 export const RootRoute = createRootRouteWithContext<{
     queryClient: QueryClient;
@@ -13,13 +14,22 @@ export const RootRoute = createRootRouteWithContext<{
 }>()({
     component: RootRouteComponent,
     loader: async ({ context: { queryClient, engine } }) => {
+        const { options } = await queryClient.ensureQueryData(
+            resourceQueryOptions<{
+                options: { id: string; name: string; code: string }[];
+            }>({
+                engine,
+                resource: "optionSets/QwsvSPpnRul/options",
+                params: {},
+            }),
+        );
         const program = await queryClient.ensureQueryData(
             resourceQueryOptions<Program>({
                 engine,
                 resource: "programs",
                 id: "ueBhWkWll5v",
                 params: {
-                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,name],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]],programRuleVariables[*],programRules[*,programRuleActions[*]]",
+                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,name],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]],programRuleVariables[*],programRules[*,programRuleActions[*]]",
                 },
             }),
         );
@@ -73,21 +83,31 @@ export const RootRoute = createRootRouteWithContext<{
             organisationUnits: me.organisationUnits,
             programRules,
             programRuleVariables,
+            serviceTypes: options,
         };
     },
 });
 
 function RootRouteComponent() {
+    const { engine } = RootRoute.useRouteContext();
+    const navigate = RootRoute.useNavigate();
+    const { organisationUnits } = RootRoute.useLoaderData();
     return (
-        <Flex
-            vertical
-            style={{
-                height: "calc(100vh - 48px)",
-                minHeight: "calc(100vh - 48px)",
-                padding: 10,
+        <TrackerContext.Provider
+            options={{
+                input: { engine, navigate, organisationUnits },
             }}
         >
-            <Outlet />
-        </Flex>
+            <Flex
+                vertical
+                style={{
+                    height: "calc(100vh - 48px)",
+                    minHeight: "calc(100vh - 48px)",
+                    padding: 10,
+                }}
+            >
+                <Outlet />
+            </Flex>
+        </TrackerContext.Provider>
     );
 }

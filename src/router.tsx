@@ -7,10 +7,15 @@ import {
 import React from "react";
 import Spinner from "./components/Spinner";
 import { RootRoute } from "./routes/__root";
-import { ClientRoutes } from "./routes/clients";
 import { IndexRoute } from "./routes/index";
+import { TrackedEntitiesRoute } from "./routes/tracked-entities";
+import { TrackedEntityRoute } from "./routes/tracked-entity";
 
-const routeTree = RootRoute.addChildren([IndexRoute, ClientRoutes]);
+const routeTree = RootRoute.addChildren([
+    IndexRoute,
+    TrackedEntitiesRoute,
+    TrackedEntityRoute,
+]);
 export const router = createRouter({
     routeTree,
     defaultPendingComponent: () => <Spinner />,

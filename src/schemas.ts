@@ -1,7 +1,14 @@
 import z from "zod";
 
+export const UserSchema = z.object({
+    uid: z.string(),
+    username: z.string(),
+    firstName: z.string(),
+    surname: z.string(),
+});
+
 export const ClientSchema = z.object({
-    orgUnit: z.string().optional(),
+    orgUnits: z.string().optional(),
 });
 
 export const OptionSetSchema = z.object({
@@ -21,6 +28,8 @@ export const DataElementSchema = z.object({
     name: z.string(),
     optionSet: OptionSetSchema.optional(),
     optionSetValue: z.boolean(),
+    valueType: z.string(),
+    formName: z.string(),
     id: z.string(),
 });
 
@@ -43,21 +52,24 @@ export const ProgramStageSchema = z.object({
 });
 
 export const TrackedEntityAttributeSchema = z.object({
+    name: z.string(),
+    valueType: z.string(),
+    optionSet: OptionSetSchema.optional(),
+    confidential: z.boolean(),
+    unique: z.boolean(),
+    generated: z.boolean(),
+    pattern: z.string(),
+    optionSetValue: z.boolean(),
+    displayFormName: z.string(),
+    id: z.string(),
+});
+
+export const ProgramTrackedEntityAttributeSchema = z.object({
     sortOrder: z.number(),
     mandatory: z.boolean(),
     id: z.string(),
-    trackedEntityAttribute: z.object({
-        name: z.string(),
-        valueType: z.string(),
-        optionSet: OptionSetSchema.optional(),
-        confidential: z.boolean(),
-        unique: z.boolean(),
-        generated: z.boolean(),
-        pattern: z.string(),
-        optionSetValue: z.boolean(),
-        displayFormName: z.string(),
-        id: z.string(),
-    }),
+    displayInList: z.boolean(),
+    trackedEntityAttribute: TrackedEntityAttributeSchema,
 });
 
 export const ProgramSchema = z.object({
@@ -69,7 +81,9 @@ export const ProgramSchema = z.object({
     id: z.string(),
     organisationUnits: z.array(z.object({ id: z.string() })),
     programStages: z.array(ProgramStageSchema),
-    programTrackedEntityAttributes: z.array(TrackedEntityAttributeSchema),
+    programTrackedEntityAttributes: z.array(
+        ProgramTrackedEntityAttributeSchema,
+    ),
 });
 
 export const ProgramRuleActionSchema = z.object({
@@ -80,6 +94,8 @@ export const ProgramRuleActionSchema = z.object({
         "DISPLAYTEXT",
         "ERROR",
         "SHOWWARNING",
+        "HIDESECTION",
+        "SHOWSECTION",
     ]),
     dataElement: z
         .object({ displayName: z.string(), id: z.string() })
@@ -118,11 +134,12 @@ export const ProgramRuleSchema = z.object({
 export const ProgramRuleVariableSchema = z.object({
     name: z.string(),
     program: z.object({ id: z.string() }),
-    dataElement: z.object({ id: z.string() }),
+    dataElement: z.object({ id: z.string() }).optional(),
     useCodeForOptionSet: z.boolean(),
     displayName: z.string(),
     id: z.string(),
     attributeValues: z.array(z.unknown()),
+    trackedEntityAttribute: z.object({ id: z.string() }).optional(),
     programRuleVariableSourceType: z.string(),
     valueType: z.enum(["TEXT", "NUMBER", "BOOLEAN", "DATE"]),
 });
@@ -135,6 +152,70 @@ export const OrgUnitSchema = z.object({
     leaf: z.boolean(),
 });
 
+export const AttributeSchema = z.object({
+    attribute: z.string(),
+    displayName: z.string(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    valueType: z.string(),
+    value: z.string(),
+});
+
+export const DataValueSchema = z.object({
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    storedBy: z.string(),
+    providedElsewhere: z.boolean(),
+    dataElement: z.string(),
+    value: z.string(),
+    createdBy: UserSchema,
+    updatedBy: UserSchema,
+});
+
+export const EventSchema = z.object({
+    event: z.string(),
+    status: z.string(),
+    program: z.string(),
+    programStage: z.string(),
+    enrollment: z.string(),
+    trackedEntity: z.string(),
+    orgUnit: z.string(),
+    relationships: z.array(z.unknown()),
+    occurredAt: z.string(),
+    followUp: z.boolean(),
+    deleted: z.boolean(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    attributeOptionCombo: z.string(),
+    attributeCategoryOptions: z.string(),
+    completedBy: z.string(),
+    completedAt: z.string(),
+    createdBy: UserSchema,
+    updatedBy: UserSchema,
+    dataValues: z.array(DataValueSchema),
+    notes: z.array(z.unknown()),
+});
+
+export const EnrollmentsSchema = z.object({
+    enrollment: z.string(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    trackedEntity: z.string(),
+    program: z.string(),
+    status: z.string(),
+    orgUnit: z.string(),
+    enrolledAt: z.string(),
+    occurredAt: z.string(),
+    followUp: z.boolean(),
+    deleted: z.boolean(),
+    createdBy: UserSchema,
+    updatedBy: UserSchema,
+    events: z.array(EventSchema),
+    relationships: z.array(z.unknown()),
+    attributes: z.array(AttributeSchema),
+    notes: z.array(z.unknown()),
+});
+
 export const TrackedEntitySchema = z.object({
     trackedEntity: z.string(),
     trackedEntityType: z.string(),
@@ -144,29 +225,18 @@ export const TrackedEntitySchema = z.object({
     inactive: z.boolean(),
     deleted: z.boolean(),
     potentialDuplicate: z.boolean(),
-    createdBy: z.object({
-        uid: z.string(),
-        username: z.string(),
-        firstName: z.string(),
-        surname: z.string(),
-    }),
-    updatedBy: z.object({
-        uid: z.string(),
-        username: z.string(),
-        firstName: z.string(),
-        surname: z.string(),
-    }),
-    attributes: z.array(
+    createdBy: UserSchema,
+    updatedBy: UserSchema,
+    attributes: z.array(AttributeSchema),
+    createdAtClient: z.string(),
+    enrollments: z.array(EnrollmentsSchema),
+    programOwners: z.array(
         z.object({
-            attribute: z.string(),
-            displayName: z.string(),
-            createdAt: z.string(),
-            updatedAt: z.string(),
-            valueType: z.string(),
-            value: z.string(),
+            orgUnit: z.string(),
+            trackedEntity: z.string(),
+            program: z.string(),
         }),
     ),
-    createdAtClient: z.string(),
 });
 
 export const TrackedEntityResponseSchema = z.object({
@@ -183,8 +253,8 @@ export type Program = z.infer<typeof ProgramSchema>;
 export type ProgramStage = z.infer<typeof ProgramStageSchema>;
 export type ProgramStageSection = z.infer<typeof ProgramStageSectionSchema>;
 export type DataElement = z.infer<typeof DataElementSchema>;
-export type TrackedEntityAttribute = z.infer<
-    typeof TrackedEntityAttributeSchema
+export type ProgramTrackedEntityAttribute = z.infer<
+    typeof ProgramTrackedEntityAttributeSchema
 >;
 export type OptionSet = z.infer<typeof OptionSetSchema>;
 export type ProgramRule = z.infer<typeof ProgramRuleSchema>;
@@ -193,3 +263,21 @@ export type ProgramRuleVariable = z.infer<typeof ProgramRuleVariableSchema>;
 export type OrgUnit = z.infer<typeof OrgUnitSchema>;
 export type TrackedEntity = z.infer<typeof TrackedEntitySchema>;
 export type TrackedEntityResponse = z.infer<typeof TrackedEntityResponseSchema>;
+export type Event = z.infer<typeof EventSchema>;
+export type Enrollment = z.infer<typeof EnrollmentsSchema>;
+export type DataValue = z.infer<typeof DataValueSchema>;
+export type Attribute = z.infer<typeof AttributeSchema>;
+export type User = z.infer<typeof UserSchema>;
+export type TrackedEntityAttribute = z.infer<
+    typeof TrackedEntityAttributeSchema
+>;
+
+export type ProgramRuleResult = {
+    assignments: Record<string, any>;
+    hiddenFields: Set<string>;
+    shownFields: Set<string>;
+    hiddenSections: Set<string>;
+    shownSections: Set<string>;
+    messages: string[];
+    warnings: string[];
+};
