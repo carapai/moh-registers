@@ -1,6 +1,7 @@
 import {
     CalendarOutlined,
     CaretRightOutlined,
+    EyeOutlined,
     MedicineBoxOutlined,
     PlusOutlined,
 } from "@ant-design/icons";
@@ -9,7 +10,6 @@ import type { DescriptionsProps, TableProps } from "antd";
 import {
     Button,
     Card,
-    Checkbox,
     Col,
     Collapse,
     DatePicker,
@@ -17,7 +17,6 @@ import {
     Flex,
     Form,
     Input,
-    InputNumber,
     message,
     Modal,
     Row,
@@ -29,11 +28,19 @@ import {
     Typography,
 } from "antd";
 import dayjs from "dayjs";
-import React, { Children, useState } from "react";
+import { set } from "lodash";
+import React, { useEffect, useState } from "react";
+import { DataElementField } from "../components/data-element-field";
+import { ProgramStageCapture } from "../components/program-stage-capture";
 import { TrackerContext } from "../machines/tracker";
-import { executeProgramRules, flattenTrackedEntity } from "../utils/utils";
-import { RootRoute } from "./__root";
 import { ProgramRuleResult } from "../schemas";
+import {
+    createEmptyEvent,
+    executeProgramRules,
+    flattenTrackedEntity,
+    isDate,
+} from "../utils/utils";
+import { RootRoute } from "./__root";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -44,27 +51,31 @@ const { Text } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 
-const isDate = (valueType: string | undefined) => {
-    return (
-        valueType === "DATE" ||
-        valueType === "DATETIME" ||
-        valueType === "TIME" ||
-        valueType === "AGE"
-    );
-};
-
 function TrackedEntity() {
-    const { program, serviceTypes, programRuleVariables, programRules } =
-        RootRoute.useLoaderData();
+    const {
+        program,
+        serviceTypes,
+        programRuleVariables,
+        programRules,
+        allDataElements,
+    } = RootRoute.useLoaderData();
+    const trackerActor = TrackerContext.useActorRef();
     const attributes = TrackerContext.useSelector(
         (state) => state.context.trackedEntity?.attributes,
     );
     const enrollment = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity?.enrollment,
+        (state) => state.context.trackedEntity.enrollment,
     );
-    const events = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity?.events,
+    const events = TrackerContext.useSelector((state) =>
+        state.context.trackedEntity.events.filter(
+            (e) => e.programStage === "K2nxbE9ubSs",
+        ),
     );
+
+    const mainEvent = TrackerContext.useSelector(
+        (state) => state.context.mainEvent,
+    );
+    const state = TrackerContext.useSelector((state) => state.value);
 
     const keys: Map<string, string> = new Map(
         program.programTrackedEntityAttributes.map((attr) => [
@@ -77,22 +88,7 @@ function TrackedEntity() {
 
     const [visitForm] = Form.useForm();
     const [loading, setLoading] = useState(false);
-    const [visits, setVisits] = useState([
-        {
-            key: "1",
-            date: "2024-11-20",
-            reason: "Regular Checkup",
-            doctor: "Dr. Smith",
-            status: "Completed",
-        },
-        {
-            key: "2",
-            date: "2024-10-15",
-            reason: "Follow-up",
-            doctor: "Dr. Johnson",
-            status: "Completed",
-        },
-    ]);
+
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [selectedVisit, setSelectedVisit] = useState(null);
 
@@ -114,61 +110,39 @@ function TrackedEntity() {
             dataValues,
         });
 
-        console.log("Rule evaluation result:", result);
         setRuleResult(result);
-        // Apply ASSIGN actions to the form
+
         for (const [key, value] of Object.entries(result.assignments)) {
             visitForm.setFieldValue(key, value);
         }
     };
 
-    const onPatientSubmit = async (values) => {
-        setLoading(true);
-        try {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            console.log("Patient info:", values);
-            message.success("Patient information saved successfully!");
-        } catch (error) {
-            message.error("Failed to save patient information.");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const onVisitSubmit = async (values) => {
-        try {
-            const newVisit = {
-                key: String(visits.length + 1),
-                date: values.date.format("YYYY-MM-DD"),
-                reason: values.reason,
-                doctor: values.doctor,
-                status: values.status,
-                diagnosis: values.diagnosis,
-                treatment: values.treatment,
-                notes: values.notes,
-            };
-            setVisits([newVisit, ...visits]);
-            message.success("Visit added successfully!");
-            setIsVisitModalOpen(false);
-            visitForm.resetFields();
-        } catch (error) {
-            message.error("Failed to add visit.");
-        }
-    };
-
-    const showVisitModal = (visit = null) => {
-        setSelectedVisit(visit);
-        // if (visit) {
-        //     visitForm.setFieldsValue({
-        //         date: dayjs(visit.date),
-        //         reason: visit.reason,
-        //         doctor: visit.doctor,
-        //         status: visit.status,
-        //         diagnosis: visit.diagnosis,
-        //         treatment: visit.treatment,
-        //         notes: visit.notes,
-        //     });
+    const onVisitSubmit = (values: Record<string, any>) => {
+        console.log(values);
+        // try {
+        //     const newVisit = {
+        //         key: String(visits.length + 1),
+        //         date: values.date.format("YYYY-MM-DD"),
+        //         reason: values.reason,
+        //         doctor: values.doctor,
+        //         status: values.status,
+        //         diagnosis: values.diagnosis,
+        //         treatment: values.treatment,
+        //         notes: values.notes,
+        //     };
+        //     setVisits([newVisit, ...visits]);
+        //     message.success("Visit added successfully!");
+        //     setIsVisitModalOpen(false);
+        //     visitForm.resetFields();
+        // } catch (error) {
+        //     message.error("Failed to add visit.");
         // }
+    };
+
+    const showVisitModal = (
+        visit: ReturnType<typeof flattenTrackedEntity>["events"][number],
+    ) => {
+        trackerActor.send({ type: "SET_MAIN_EVENT", mainEvent: visit });
         setIsVisitModalOpen(true);
     };
 
@@ -187,18 +161,24 @@ function TrackedEntity() {
             key: "date",
             render: (date) => dayjs(date).format("MMM DD, YYYY"),
         },
-        // {
-        //     title: "Action",
-        //     key: "action",
-        //     render: (_, record) => (
-        //         <Button
-        //             icon={<EyeOutlined />}
-        //             onClick={() => showVisitModal(record)}
-        //         >
-        //             View
-        //         </Button>
-        //     ),
-        // },
+        {
+            title: "Services",
+            dataIndex: ["dataValues", "mrKZWf2WMIC"],
+            key: "services",
+        },
+        {
+            title: "Action",
+            key: "action",
+            width: 100,
+            render: (_, record) => (
+                <Button
+                    icon={<EyeOutlined />}
+                    onClick={() => showVisitModal(record)}
+                >
+                    View
+                </Button>
+            ),
+        },
     ];
 
     const items: DescriptionsProps["items"] = Object.entries(
@@ -209,14 +189,46 @@ function TrackedEntity() {
     }));
 
     const handleValuesChange = (_changed: any, allValues: any) => {
-        console.log("Values changed:", allValues);
         evaluateRules(allValues);
     };
+
+    useEffect(() => {
+        visitForm.resetFields();
+        if (
+            mainEvent &&
+            mainEvent.dataValues &&
+            Object.keys(mainEvent.dataValues).length > 0
+        ) {
+            const formValues = {
+                occurredAt: mainEvent.occurredAt,
+                ...Object.entries(mainEvent.dataValues).reduce(
+                    (acc, [key, value]) => {
+                        set(acc, key, value);
+                        return acc;
+                    },
+                    {},
+                ),
+            };
+            setTimeout(() => {
+                visitForm.setFieldsValue(formValues);
+                evaluateRules(formValues);
+            }, 0);
+        } else {
+            evaluateRules(mainEvent?.dataValues || {});
+        }
+    }, [open, mainEvent]);
     return (
         <>
             <Splitter style={{ height: "calc(100vh - 48px)" }}>
                 <Splitter.Panel style={{ padding: 10 }}>
                     <Flex vertical gap="16px">
+                        <Button
+                            onClick={() =>
+                                trackerActor.send({ type: "GO_BACK" })
+                            }
+                        >
+                            Back
+                        </Button>
                         <Descriptions bordered column={3} items={items} />
                         <Card
                             title={
@@ -229,7 +241,23 @@ function TrackedEntity() {
                                 <Button
                                     type="primary"
                                     icon={<PlusOutlined />}
-                                    onClick={() => showVisitModal()}
+                                    onClick={() => {
+                                        trackerActor.send({
+                                            type: "SET_ACTION",
+                                            action: "CREATE",
+                                        });
+                                        showVisitModal(
+                                            createEmptyEvent({
+                                                program: enrollment.program,
+                                                trackedEntity:
+                                                    enrollment.trackedEntity,
+                                                enrollment:
+                                                    enrollment.enrollment,
+                                                orgUnit: enrollment.orgUnit,
+                                                programStage: "K2nxbE9ubSs",
+                                            }),
+                                        );
+                                    }}
                                 >
                                     Add Visit
                                 </Button>
@@ -239,7 +267,7 @@ function TrackedEntity() {
                             <Table
                                 columns={columns}
                                 dataSource={events}
-                                pagination={{ pageSize: 10 }}
+                                pagination={false}
                                 rowKey="event"
                             />
                         </Card>
@@ -247,7 +275,7 @@ function TrackedEntity() {
                 </Splitter.Panel>
 
                 <Splitter.Panel
-                    defaultSize="40%"
+                    defaultSize="20%"
                     collapsible={{
                         start: true,
                         end: true,
@@ -366,7 +394,7 @@ function TrackedEntity() {
                               </Button>,
                           ]
                 }
-                width="80vw"
+                width="90vw"
                 styles={{
                     body: {
                         maxHeight: "70vh",
@@ -389,7 +417,7 @@ function TrackedEntity() {
                             <Col span={12}>
                                 <Form.Item
                                     label="Visit Date"
-                                    name="date"
+                                    name="occurredAt"
                                     rules={[
                                         {
                                             required: true,
@@ -397,6 +425,14 @@ function TrackedEntity() {
                                                 "Please select visit date!",
                                         },
                                     ]}
+                                    getValueProps={(value) => ({
+                                        value: value ? dayjs(value) : null,
+                                    })}
+                                    normalize={(value) =>
+                                        dayjs.isDayjs(value)
+                                            ? value.format("YYYY-MM-DD")
+                                            : value
+                                    }
                                 >
                                     <DatePicker style={{ width: "100%" }} />
                                 </Form.Item>
@@ -429,6 +465,26 @@ function TrackedEntity() {
                         <Tabs
                             tabPlacement="start"
                             items={program.programStages.flatMap((stage) => {
+                                if (
+                                    [
+                                        "opwSN351xGC",
+                                        "zKGWob5AZKP",
+                                        "DA0Yt3V16AN",
+                                    ].indexOf(stage.id) !== -1
+                                ) {
+                                    return {
+                                        key: stage.id,
+                                        label: stage.name,
+                                        children: (
+                                            <ProgramStageCapture
+                                                programStage={stage}
+                                                occurredAt={dayjs().format(
+                                                    "YYYY-MM-DD",
+                                                )}
+                                            />
+                                        ),
+                                    };
+                                }
                                 return stage.programStageSections.flatMap(
                                     (section) => {
                                         if (
@@ -447,161 +503,33 @@ function TrackedEntity() {
                                                 children: (
                                                     <Row gutter={24}>
                                                         {section.dataElements.map(
-                                                            (dataElement) => {
-                                                                if (
-                                                                    ruleResult.hiddenFields.has(
-                                                                        dataElement.id,
-                                                                    )
-                                                                )
-                                                                    return null;
-                                                                let element: React.ReactNode =
-                                                                    <Input />;
-
-                                                                if (
-                                                                    dataElement.optionSetValue &&
-                                                                    dataElement.optionSet
-                                                                ) {
-                                                                    element = (
-                                                                        <Select
-                                                                            options={dataElement.optionSet.options.map(
-                                                                                (
-                                                                                    o,
-                                                                                ) => ({
-                                                                                    label: o.name,
-                                                                                    value: o.code,
-                                                                                }),
-                                                                            )}
-                                                                            allowClear
-                                                                            mode={
-                                                                                dataElement.valueType ===
-                                                                                "MULTI_TEXT"
-                                                                                    ? "multiple"
-                                                                                    : undefined
-                                                                            }
-                                                                        />
-                                                                    );
-                                                                } else if (
-                                                                    dataElement.valueType ===
-                                                                    "BOOLEAN"
-                                                                ) {
-                                                                    element = (
-                                                                        <Checkbox>
-                                                                            {dataElement.formName ??
-                                                                                dataElement.name}
-                                                                        </Checkbox>
-                                                                    );
-                                                                } else if (
-                                                                    dataElement.valueType ===
-                                                                        "DATE" ||
-                                                                    dataElement.valueType ===
-                                                                        "DATETIME" ||
-                                                                    dataElement.valueType ===
-                                                                        "TIME" ||
-                                                                    dataElement.valueType ===
-                                                                        "AGE"
-                                                                ) {
-                                                                    element = (
-                                                                        <DatePicker
-                                                                            style={{
-                                                                                width: "100%",
-                                                                            }}
-                                                                        />
-                                                                    );
-                                                                } else if (
-                                                                    dataElement.valueType ===
-                                                                    "LONG_TEXT"
-                                                                ) {
-                                                                    element = (
-                                                                        <Input.TextArea
-                                                                            rows={
-                                                                                4
-                                                                            }
-                                                                        />
-                                                                    );
-                                                                } else if (
-                                                                    [
-                                                                        "NUMBER",
-                                                                        "INTEGER",
-                                                                        "INTEGER_POSITIVE",
-                                                                    ].includes(
-                                                                        dataElement.valueType ??
-                                                                            "",
-                                                                    )
-                                                                ) {
-                                                                    element = (
-                                                                        <InputNumber
-                                                                            style={{
-                                                                                width: "100%",
-                                                                            }}
-                                                                        />
-                                                                    );
-                                                                }
-
-                                                                return (
-                                                                    <Col
-                                                                        span={8}
-                                                                        key={
-                                                                            dataElement.id
+                                                            (dataElement) =>
+                                                                ruleResult.hiddenFields.has(
+                                                                    dataElement.id,
+                                                                ) ? null : (
+                                                                    <DataElementField
+                                                                        dataElement={
+                                                                            dataElement
                                                                         }
-                                                                    >
-                                                                        <Form.Item
-                                                                            key={
-                                                                                dataElement.id
-                                                                            }
-                                                                            label={
-                                                                                dataElement.valueType ===
-                                                                                "BOOLEAN"
-                                                                                    ? null
-                                                                                    : `${
-                                                                                          dataElement.formName ||
-                                                                                          dataElement.name
-                                                                                      } ${dataElement.valueType}`
-                                                                            }
-                                                                            name={
-                                                                                dataElement.id
-                                                                            }
-                                                                            getValueProps={
-                                                                                isDate(
-                                                                                    dataElement?.valueType,
-                                                                                )
-                                                                                    ? (
-                                                                                          value,
-                                                                                      ) =>
-                                                                                          isDate(
-                                                                                              dataElement?.valueType,
-                                                                                          )
-                                                                                              ? {
-                                                                                                    value: value
-                                                                                                        ? dayjs(
-                                                                                                              value,
-                                                                                                          )
-                                                                                                        : null,
-                                                                                                }
-                                                                                              : {}
-                                                                                    : undefined
-                                                                            }
-                                                                            normalize={(
-                                                                                value,
-                                                                            ) =>
-                                                                                isDate(
-                                                                                    dataElement?.valueType,
-                                                                                ) &&
-                                                                                dayjs.isDayjs(
-                                                                                    value,
-                                                                                )
-                                                                                    ? value.format(
-                                                                                          "YYYY-MM-DD",
-                                                                                      )
-                                                                                    : value
-                                                                            }
-                                                                        >
-                                                                            {
-                                                                                element
-                                                                            }
-                                                                        </Form.Item>
-                                                                    </Col>
-                                                                );
-                                                            },
+                                                                        hidden={ruleResult.hiddenFields.has(
+                                                                            dataElement.id,
+                                                                        )}
+                                                                        renderOptionsAsRadio={
+                                                                            allDataElements.get(
+                                                                                dataElement.id,
+                                                                            )
+                                                                                ?.renderOptionsAsRadio ??
+                                                                            false
+                                                                        }
+                                                                        vertical={
+                                                                            allDataElements.get(
+                                                                                dataElement.id,
+                                                                            )
+                                                                                ?.vertical ??
+                                                                            false
+                                                                        }
+                                                                    />
+                                                                ),
                                                         )}
                                                     </Row>
                                                 ),
@@ -616,23 +544,4 @@ function TrackedEntity() {
             </Modal>
         </>
     );
-}
-
-{
-    /* <Row gutter={16}>
-    <Col xs={24} sm={24}>
-        <Form.Item
-            label="Visit Date"
-            name="date"
-            rules={[
-                {
-                    required: true,
-                    message: "Please select visit date!",
-                },
-            ]}
-        >
-            <DatePicker style={{ width: "100%" }} />
-        </Form.Item>
-    </Col>
-</Row>; */
 }

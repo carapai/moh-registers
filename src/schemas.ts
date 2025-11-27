@@ -44,7 +44,18 @@ export const ProgramStageSectionSchema = z.object({
 export const ProgramStageSchema = z.object({
     name: z.string(),
     programStageDataElements: z.array(
-        z.object({ compulsory: z.boolean(), id: z.string() }),
+        z.object({
+            compulsory: z.boolean(),
+            id: z.string(),
+            allowFutureDate: z.boolean(),
+            dataElement: DataElementSchema,
+            renderType: z
+                .object({
+                    MOBILE: z.object({ type: z.string() }),
+                    DESKTOP: z.object({ type: z.string() }),
+                })
+                .optional(),
+        }),
     ),
     id: z.string(),
     repeatable: z.boolean(),
@@ -180,20 +191,20 @@ export const EventSchema = z.object({
     enrollment: z.string(),
     trackedEntity: z.string(),
     orgUnit: z.string(),
-    relationships: z.array(z.unknown()),
+    relationships: z.array(z.unknown()).optional(),
     occurredAt: z.string(),
     followUp: z.boolean(),
     deleted: z.boolean(),
     createdAt: z.string(),
     updatedAt: z.string(),
-    attributeOptionCombo: z.string(),
-    attributeCategoryOptions: z.string(),
-    completedBy: z.string(),
-    completedAt: z.string(),
-    createdBy: UserSchema,
-    updatedBy: UserSchema,
+    attributeOptionCombo: z.string().optional(),
+    attributeCategoryOptions: z.string().optional(),
+    completedBy: z.string().optional(),
+    completedAt: z.string().optional(),
+    createdBy: UserSchema.optional(),
+    updatedBy: UserSchema.optional(),
     dataValues: z.array(DataValueSchema),
-    notes: z.array(z.unknown()),
+    notes: z.array(z.unknown()).optional(),
 });
 
 export const EnrollmentsSchema = z.object({
@@ -208,12 +219,12 @@ export const EnrollmentsSchema = z.object({
     occurredAt: z.string(),
     followUp: z.boolean(),
     deleted: z.boolean(),
-    createdBy: UserSchema,
-    updatedBy: UserSchema,
+    createdBy: 	UserSchema.optional(),
+    updatedBy: UserSchema.optional(),
     events: z.array(EventSchema),
-    relationships: z.array(z.unknown()),
+    relationships: z.array(z.unknown()).optional(),
     attributes: z.array(AttributeSchema),
-    notes: z.array(z.unknown()),
+    notes: z.array(z.unknown()).optional(),
 });
 
 export const TrackedEntitySchema = z.object({
@@ -225,8 +236,8 @@ export const TrackedEntitySchema = z.object({
     inactive: z.boolean(),
     deleted: z.boolean(),
     potentialDuplicate: z.boolean(),
-    createdBy: UserSchema,
-    updatedBy: UserSchema,
+    createdBy: UserSchema.optional(),
+    updatedBy: UserSchema.optional(),
     attributes: z.array(AttributeSchema),
     createdAtClient: z.string(),
     enrollments: z.array(EnrollmentsSchema),
@@ -236,7 +247,7 @@ export const TrackedEntitySchema = z.object({
             trackedEntity: z.string(),
             program: z.string(),
         }),
-    ),
+    ).optional(),
 });
 
 export const TrackedEntityResponseSchema = z.object({

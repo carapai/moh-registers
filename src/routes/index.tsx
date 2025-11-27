@@ -7,7 +7,7 @@ export const IndexRoute = createRoute({
     component: IndexRouteComponent,
     beforeLoad: () => {
         throw redirect({
-            to: "/clients",
+            to: "/tracked-entities",
         });
     },
 });

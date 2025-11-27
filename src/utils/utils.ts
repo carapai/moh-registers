@@ -1,3 +1,4 @@
+import dayjs from "dayjs";
 import { TableProps } from "antd";
 import {
     ProgramRule,
@@ -7,6 +8,7 @@ import {
     TrackedEntity,
     TrackedEntityResponse,
 } from "../schemas";
+import { generateUid } from "./id";
 
 export const flattenTrackedEntityResponse = (te: TrackedEntityResponse) => {
     return te.trackedEntities.flatMap(
@@ -55,6 +57,7 @@ export const flattenTrackedEntity = ({
         attributes: { ...trackedEntityAttributes, ...enrollmentAttrs },
         enrollment: enrollmentDetails,
         events: flattenedEvents,
+        trackedEntity,
     };
 };
 
@@ -473,3 +476,77 @@ export function executeProgramRules({
 
     return result;
 }
+
+export const isDate = (valueType: string | undefined) => {
+    return (
+        valueType === "DATE" ||
+        valueType === "DATETIME" ||
+        valueType === "TIME" ||
+        valueType === "AGE"
+    );
+};
+
+export const createEmptyTrackedEntity = ({
+    orgUnit,
+}: {
+    orgUnit: string;
+}): ReturnType<typeof flattenTrackedEntity> => {
+    const trackedEntity = generateUid();
+    return {
+        orgUnit,
+        attributes: {},
+        enrollment: {
+            createdAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+            program: "ueBhWkWll5v",
+            deleted: false,
+            orgUnit,
+            trackedEntity,
+            enrollment: generateUid(),
+            enrolledAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+            occurredAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+            status: "ACTIVE",
+            updatedAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+            followUp: false,
+        },
+        events: [],
+        trackedEntityType: "QG9qZrGHLzV",
+        createdAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        updatedAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        deleted: false,
+        inactive: false,
+        createdAtClient: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        potentialDuplicate: false,
+        trackedEntity,
+    };
+};
+
+export const createEmptyEvent = ({
+    orgUnit,
+    program,
+    trackedEntity,
+    enrollment,
+		programStage
+}: {
+    orgUnit: string;
+    program: string;
+    trackedEntity: string;
+    enrollment: string;
+		programStage: string;
+}): ReturnType<typeof flattenTrackedEntity>["events"][number] => {
+    const eventId = generateUid();
+    return {
+        event: eventId,
+        program,
+        programStage,
+        orgUnit,
+        trackedEntity,
+        enrollment,
+        dataValues: {},
+        status: "ACTIVE",
+        occurredAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        followUp: false,
+        deleted: false,
+        createdAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        updatedAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+    };
+};

@@ -29,7 +29,7 @@ export const RootRoute = createRootRouteWithContext<{
                 resource: "programs",
                 id: "ueBhWkWll5v",
                 params: {
-                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,name],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]],programRuleVariables[*],programRules[*,programRuleActions[*]]",
+                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]],programRuleVariables[*],programRules[*,programRuleActions[*]]",
                 },
             }),
         );
@@ -78,12 +78,38 @@ export const RootRoute = createRootRouteWithContext<{
             }),
         );
 
+        const allDataElements: Map<
+            string,
+            {
+                allowFutureDate: boolean;
+                renderOptionsAsRadio: boolean;
+                compulsory: boolean;
+                vertical: boolean;
+            }
+        > = new Map(
+            program.programStages
+                .flatMap((ps) => ps.programStageDataElements)
+                .map((psde) => [
+                    psde.dataElement.id,
+                    {
+                        allowFutureDate: psde.allowFutureDate,
+                        renderOptionsAsRadio: psde.renderType !== undefined,
+                        compulsory: psde.compulsory,
+                        vertical: psde.renderType
+                            ? psde.renderType.DESKTOP?.type !==
+                              "HORIZONTAL_RADIOBUTTONS"
+                            : false,
+                    },
+                ]),
+        );
+
         return {
             program,
             organisationUnits: me.organisationUnits,
             programRules,
             programRuleVariables,
             serviceTypes: options,
+            allDataElements,
         };
     },
 });

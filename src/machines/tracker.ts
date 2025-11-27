@@ -3,23 +3,26 @@ import { createActorContext } from "@xstate/react";
 import { assign, fromPromise, setup } from "xstate";
 import { queryClient } from "../query-client";
 import {
+    createEmptyEvent,
+    createEmptyTrackedEntity,
     flattenTrackedEntity,
     flattenTrackedEntityResponse,
 } from "../utils/utils";
 import { resourceQueryOptions } from "../query-options";
 import { OrgUnit, TrackedEntity, TrackedEntityResponse } from "../schemas";
 import { UseNavigateResult } from "@tanstack/react-router";
-import { en } from "zod/locales";
 
 interface TrackerContext {
     trackedEntities: ReturnType<typeof flattenTrackedEntityResponse>;
-    trackedEntity?: ReturnType<typeof flattenTrackedEntity>;
+    trackedEntity: ReturnType<typeof flattenTrackedEntity>;
     trackedEntityId?: string;
     error?: string;
     engine: ReturnType<typeof useDataEngine>;
     action: "CREATE" | "UPDATE";
     navigate: UseNavigateResult<"/">;
     organisationUnits: OrgUnit[];
+    currentEvent: ReturnType<typeof flattenTrackedEntity>["events"][number];
+    mainEvent: ReturnType<typeof flattenTrackedEntity>["events"][number];
 }
 
 type TrackerEvents =
@@ -43,6 +46,20 @@ type TrackerEvents =
     | {
           type: "SET_TRACKED_ENTITY_ID";
           trackedEntityId: string;
+      }
+    | {
+          type: "CREATE_OR_UPDATE_EVENT";
+          event: ReturnType<typeof flattenTrackedEntity>["events"][number];
+      }
+    | {
+          type: "SET_CURRENT_EVENT";
+          currentEvent: ReturnType<
+              typeof flattenTrackedEntity
+          >["events"][number];
+      }
+    | {
+          type: "SET_MAIN_EVENT";
+          mainEvent: ReturnType<typeof flattenTrackedEntity>["events"][number];
       }
     | {
           type: "SET_TRACKED_ENTITY";
@@ -122,6 +139,22 @@ export const trackerMachine = setup({
             navigate,
             action: "CREATE",
             organisationUnits,
+            trackedEntity: createEmptyTrackedEntity({ orgUnit: "" }),
+            currentEvent: createEmptyEvent({
+                orgUnit: "",
+                program: "",
+                trackedEntity: "",
+                enrollment: "",
+                programStage: "K2nxbE9ubSs",
+            }),
+            mainEvent: createEmptyEvent({
+                orgUnit: "",
+                program: "",
+                trackedEntity: "",
+                enrollment: "",
+                programStage: "K2nxbE9ubSs",
+            }),
+            trackedEntityId: "",
         };
     },
     states: {
@@ -193,6 +226,57 @@ export const trackerMachine = setup({
             on: {
                 GO_BACK: {
                     target: "loading",
+                },
+                SET_CURRENT_EVENT: {
+                    actions: assign({
+                        currentEvent: ({ event }) => {
+                            return event.currentEvent;
+                        },
+                    }),
+                },
+                SET_MAIN_EVENT: {
+                    actions: assign({
+                        mainEvent: ({ event }) => {
+                            return event.mainEvent;
+                        },
+                    }),
+                },
+                CREATE_OR_UPDATE_EVENT: {
+                    // target: "optimisticUpdate",
+                    actions: assign({
+                        trackedEntity: ({ context, event }) => {
+                            if (context.action === "CREATE") {
+                                return {
+                                    ...context.trackedEntity,
+                                    events: [
+                                        ...context.trackedEntity.events,
+                                        event.event,
+                                    ],
+                                };
+                            } else {
+                                return {
+                                    ...context.trackedEntity,
+                                    events: context.trackedEntity.events.map(
+                                        (e) =>
+                                            e.event === event.event.event
+                                                ? event.event
+                                                : e,
+                                    ),
+                                };
+                            }
+                        },
+                    }),
+                },
+            },
+        },
+        optimisticUpdate: {
+            on: {
+                SET_CURRENT_EVENT: {
+                    actions: assign({
+                        currentEvent: ({ event }) => {
+                            return event.currentEvent;
+                        },
+                    }),
                 },
             },
         },
