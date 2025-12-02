@@ -9,24 +9,35 @@ import {
     Select,
 } from "antd";
 import React from "react";
-import { RootRoute } from "../routes/__root";
-import { DataElement, OptionSet } from "../schemas";
+import {
+    DataElement,
+    Message,
+    OptionSet,
+    TrackedEntityAttribute,
+} from "../schemas";
 import { createGetValueProps, createNormalize } from "../utils/utils";
 
 export const DataElementField: React.FC<{
-    dataElement: DataElement;
+    dataElement: DataElement | TrackedEntityAttribute;
     hidden: boolean;
     renderOptionsAsRadio: boolean;
     vertical: boolean;
     finalOptions?: OptionSet["options"];
+    errors: Array<Message>;
+    messages: Array<Message>;
+    warnings: Array<Message>;
+    required: boolean;
 }> = ({
     dataElement,
     hidden,
     renderOptionsAsRadio,
     vertical,
     finalOptions,
+    errors,
+    messages,
+    warnings,
+    required,
 }) => {
-    const { allDataElements } = RootRoute.useLoaderData();
     if (hidden) return null;
     let element: React.ReactNode = <Input />;
 
@@ -114,9 +125,10 @@ export const DataElementField: React.FC<{
                         : `${dataElement.formName || dataElement.name}`
                 }
                 name={dataElement.id}
-                required={allDataElements.get(dataElement.id)?.compulsory}
+                required={required}
                 getValueProps={createGetValueProps(dataElement.valueType)}
                 normalize={createNormalize(dataElement.valueType)}
+                extra={warnings.map((w) => w.content)}
             >
                 {element}
             </Form.Item>

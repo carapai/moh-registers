@@ -28,7 +28,7 @@ export const RootRoute = createRootRouteWithContext<{
                 resource: "programs",
                 id: "ueBhWkWll5v",
                 params: {
-                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]]",
+                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,formName,optionSet[id,name,options[id,name,code]]]]",
                 },
             }),
         );

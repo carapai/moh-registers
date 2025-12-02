@@ -1,7 +1,6 @@
 import { createRoute } from "@tanstack/react-router";
-import { Checkbox, Flex, Space } from "antd";
+import { Flex } from "antd";
 import React, { useState } from "react";
-import { Spinner } from "../components/Spinner";
 import PatientListScreen from "../components/patient-list";
 import OrgUnitTreeSelect from "../components/tree-select";
 import { TrackerContext } from "../machines/tracker";
@@ -20,6 +19,7 @@ function TrackedEntities() {
     const orgUnit = TrackerContext.useSelector(
         (state) => state.context.orgUnit,
     );
+
     return (
         <Flex vertical gap="16px" style={{ height: "100%" }}>
             <OrgUnitTreeSelect

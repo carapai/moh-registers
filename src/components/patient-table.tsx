@@ -29,6 +29,7 @@ import { TrackerContext } from "../machines/tracker";
 import { TrackedEntityAttribute } from "../schemas";
 import { flattenTrackedEntityResponse } from "../utils/utils";
 import { PatientLastVisit } from "./patient-last-visit";
+import { TrackerRegistration } from "./tracker-registration";
 
 const { Text } = Typography;
 
@@ -335,6 +336,11 @@ export const PatientTable: React.FC = () => {
                         setTimeout(() => searchInput.current?.select(), 100);
                     }
                 },
+                filterIcon: (filtered: boolean) => (
+                    <SearchOutlined
+                        style={{ color: filtered ? "#1677ff" : undefined }}
+                    />
+                ),
             };
         }
 
@@ -346,6 +352,11 @@ export const PatientTable: React.FC = () => {
                     setTimeout(() => searchInput.current?.select(), 100);
                 }
             },
+            filterIcon: (filtered: boolean) => (
+                <SearchOutlined
+                    style={{ color: filtered ? "#1677ff" : undefined }}
+                />
+            ),
         };
     };
 
@@ -662,7 +673,7 @@ export const PatientTable: React.FC = () => {
                                 {/* Columns ({visibleCount}/{columns.length}) */}
                             </Button>
                         </Popover>
-                        <Button
+                        {/* <Button
                             type="primary"
                             icon={<PlusOutlined />}
                             style={{
@@ -671,7 +682,8 @@ export const PatientTable: React.FC = () => {
                             }}
                         >
                             Add Patient
-                        </Button>
+                        </Button> */}
+                        <TrackerRegistration />
                     </Space>
                 </div>
 

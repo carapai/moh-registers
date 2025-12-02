@@ -1,14 +1,16 @@
 import { FormItemProps, TableProps } from "antd";
 import dayjs from "dayjs";
 import {
-	ProgramRule,
-	ProgramRuleResult,
-	ProgramRuleVariable,
-	ProgramTrackedEntityAttribute,
-	TrackedEntity,
-	TrackedEntityResponse
+    ProgramRule,
+    ProgramRuleResult,
+    ProgramRuleVariable,
+    ProgramTrackedEntityAttribute,
+    TrackedEntity,
+    TrackedEntityResponse,
 } from "../schemas";
 import { generateUid } from "./id";
+import { isEmpty } from "lodash";
+import { is } from "zod/locales";
 
 export const flattenTrackedEntityResponse = (te: TrackedEntityResponse) => {
     return te.trackedEntities.flatMap(
@@ -90,11 +92,10 @@ export function executeProgramRules({
 }: {
     programRules: ProgramRule[];
     programRuleVariables: ProgramRuleVariable[];
-    dataValues: Record<string, any>;
+    dataValues?: Record<string, any>;
     attributeValues?: Record<string, any>;
 }): ProgramRuleResult {
     const variableValues: Record<string, any> = {};
-
     // Process program rule variables
     for (const variable of programRuleVariables) {
         let value: any = null;
@@ -102,7 +103,7 @@ export function executeProgramRules({
         // Check for data element
         if (
             variable.dataElement &&
-            dataValues.hasOwnProperty(variable.dataElement.id)
+            dataValues?.hasOwnProperty(variable.dataElement.id)
         ) {
             value = dataValues[variable.dataElement.id];
         }
@@ -116,6 +117,8 @@ export function executeProgramRules({
 
         variableValues[variable.name] = value ?? null;
     }
+
+    console.log("Variable values for rule evaluation:", variableValues);
 
     // D2 function implementations
     const d2Functions = {
@@ -276,10 +279,16 @@ export function executeProgramRules({
 
         hasDataValue: (dataElementId: string): boolean => {
             return (
-                dataValues.hasOwnProperty(dataElementId) &&
-                dataValues[dataElementId] !== null &&
-                dataValues[dataElementId] !== undefined &&
-                dataValues[dataElementId] !== ""
+                (!isEmpty(dataValues) &&
+                    dataValues.hasOwnProperty(dataElementId) &&
+                    dataValues[dataElementId] !== null &&
+                    dataValues[dataElementId] !== undefined &&
+                    dataValues[dataElementId] !== "") ||
+                (!isEmpty(attributeValues) &&
+                    attributeValues.hasOwnProperty(dataElementId) &&
+                    attributeValues[dataElementId] !== null &&
+                    attributeValues[dataElementId] !== undefined &&
+                    attributeValues[dataElementId] !== "")
             );
         },
 
@@ -376,24 +385,32 @@ export function executeProgramRules({
             },
         );
 
+        console.log(
+            "Processed condition for rule evaluation:",
+            processedCondition,
+        );
+
         try {
             // Normalize comparison operators
-            let parts = processedCondition.split("'");
-            for (let i = 0; i < parts.length; i += 2) {
-                parts[i] = parts[i]
-                    .replace(/!=/g, "!==")
-                    .replace(/([^!<>=])={2}(?!=)/g, "$1===")
-                    .replace(/([^!<>=])=(?!=)/g, "$1===");
+            if (!isEmpty(processedCondition)) {
+                let parts = processedCondition.split("'");
+                for (let i = 0; i < parts.length; i += 2) {
+                    parts[i] = parts[i]
+                        .replace(/!=/g, "!==")
+                        .replace(/([^!<>=])={2}(?!=)/g, "$1===")
+                        .replace(/([^!<>=])=(?!=)/g, "$1===");
+                }
+                const normalizedCond = parts.join("'");
+                // Create function with d2Functions and variableValues in scope
+                const func = new Function(
+                    "d2Functions",
+                    "variableValues",
+                    `return (${normalizedCond})`,
+                );
+                const value = func(d2Functions, variableValues);
+                return value;
             }
-            const normalizedCond = parts.join("'");
-            // Create function with d2Functions and variableValues in scope
-            const func = new Function(
-                "d2Functions",
-                "variableValues",
-                `return (${normalizedCond})`,
-            );
-            const value = func(d2Functions, variableValues);
-            return value;
+            return false;
         } catch (err) {
             console.warn(
                 `Invalid condition: ${condition}`,
@@ -409,6 +426,7 @@ export function executeProgramRules({
         assignments: {},
         hiddenFields: new Set(),
         shownFields: new Set(),
+        errors: [],
         hiddenSections: new Set(),
         shownSections: new Set(),
         hiddenOptions: {},
@@ -424,24 +442,27 @@ export function executeProgramRules({
         if (!isTrue) continue;
 
         for (const action of rule.programRuleActions) {
+            const targetId =
+                action.dataElement?.id ||
+                action.trackedEntityAttribute?.id ||
+                "";
             switch (action.programRuleActionType) {
                 case "ASSIGN":
-                    if (action.dataElement) {
-                        result.assignments[action.dataElement.id] =
-                            action.value;
+                    if (targetId) {
+                        result.assignments[targetId] = action.value;
                     }
                     break;
 
                 case "HIDEFIELD":
-                    if (action.dataElement) {
-                        result.hiddenFields.add(action.dataElement.id);
-                        result.assignments[action.dataElement.id] = "";
+                    if (targetId) {
+                        result.hiddenFields.add(targetId);
+                        result.assignments[targetId] = "";
                     }
                     break;
 
                 case "SHOWFIELD":
-                    if (action.dataElement) {
-                        result.shownFields.add(action.dataElement.id);
+                    if (targetId) {
+                        result.shownFields.add(targetId);
                     }
                     break;
 
@@ -460,94 +481,81 @@ export function executeProgramRules({
                     break;
 
                 case "HIDEOPTION":
-                    {
-                        const targetId =
-                            action.dataElement?.id ||
-                            action.trackedEntityAttribute?.id;
-                        if (targetId && action.option) {
-                            if (!result.hiddenOptions[targetId]) {
-                                result.hiddenOptions[targetId] = new Set();
-                            }
-                            result.hiddenOptions[targetId].add(
-                                action.option.id,
-                            );
+                    if (targetId && action.option) {
+                        if (!result.hiddenOptions[targetId]) {
+                            result.hiddenOptions[targetId] = new Set();
                         }
+                        result.hiddenOptions[targetId].add(action.option.id);
                     }
                     break;
 
                 case "SHOWOPTION":
-                    {
-                        const targetId =
-                            action.dataElement?.id ||
-                            action.trackedEntityAttribute?.id;
-                        if (targetId && action.option) {
-                            if (!result.shownOptions[targetId]) {
-                                result.shownOptions[targetId] = new Set();
-                            }
-                            result.shownOptions[targetId].add(action.option.id);
-                            console.log(
-                                "Shown option:",
-                                action.option.id,
-                                "for field:",
-                                targetId,
-                            );
+                    if (targetId && action.option) {
+                        if (!result.shownOptions[targetId]) {
+                            result.shownOptions[targetId] = new Set();
                         }
+                        result.shownOptions[targetId].add(action.option.id);
                     }
                     break;
 
                 case "HIDEOPTIONGROUP":
-                    {
-                        const targetId =
-                            action.dataElement?.id ||
-                            action.trackedEntityAttribute?.id;
-                        if (targetId && action.optionGroup) {
-                            if (!result.hiddenOptionGroups[targetId]) {
-                                result.hiddenOptionGroups[targetId] = new Set();
-                            }
-                            result.hiddenOptionGroups[targetId].add(
-                                action.optionGroup.id,
-                            );
+                    if (targetId && action.optionGroup) {
+                        if (!result.hiddenOptionGroups[targetId]) {
+                            result.hiddenOptionGroups[targetId] = new Set();
                         }
+                        result.hiddenOptionGroups[targetId].add(
+                            action.optionGroup.id,
+                        );
                     }
+
                     break;
 
                 case "SHOWOPTIONGROUP":
-                    {
-                        const targetId =
-                            action.dataElement?.id ||
-                            action.trackedEntityAttribute?.id;
-                        if (targetId && action.optionGroup) {
-                            if (!result.shownOptionGroups[targetId]) {
-                                result.shownOptionGroups[targetId] = new Set();
-                            }
-                            result.shownOptionGroups[targetId].add(
-                                action.optionGroup.id,
-                            );
+                    if (targetId && action.optionGroup) {
+                        if (!result.shownOptionGroups[targetId]) {
+                            result.shownOptionGroups[targetId] = new Set();
                         }
+                        result.shownOptionGroups[targetId].add(
+                            action.optionGroup.id,
+                        );
                     }
                     break;
 
                 case "DISPLAYTEXT":
-                    if (action.value) {
-                        result.messages.push(action.value);
+                    if (targetId && action.content) {
+                        if (targetId && action.content) {
+                            result.messages.push({
+                                key: targetId,
+                                content: action.content ?? "",
+                            });
+                        }
                     }
                     break;
 
                 case "ERROR":
-                    if (action.value) {
-                        result.messages.push(`Error: ${action.value}`);
+                    if (targetId && action.content) {
+                        if (targetId && action.content) {
+                            result.errors.push({
+                                key: targetId,
+                                content: action.content ?? "",
+                            });
+                        }
                     }
                     break;
 
                 case "SHOWWARNING":
-                    if (action.value) {
-                        result.warnings.push(action.value);
+                    {
+                        if (targetId && action.content) {
+                            result.warnings.push({
+                                key: targetId,
+                                content: action.content ?? "",
+                            });
+                        }
                     }
                     break;
             }
         }
     }
-
     return result;
 }
 

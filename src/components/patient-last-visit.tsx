@@ -28,7 +28,6 @@ export const PatientLastVisit: React.FC<{ trackedEntity: string }> = ({
     if (isError) return <div>Error loading last visit data</div>;
     if (isLoading) return <Spinner height="100%" />;
     if (!data || data.events.length === 0) return <div>No visit</div>;
-    console.log("Last visit data:", data);
     const lastVisit = data.events[0].occurredAt;
     return (
         <Tag color="green" style={{ fontSize: 16 }}>

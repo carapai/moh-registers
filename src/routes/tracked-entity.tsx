@@ -31,6 +31,7 @@ import { set } from "lodash";
 import React, { useEffect, useState } from "react";
 import { DataElementField } from "../components/data-element-field";
 import { ProgramStageCapture } from "../components/program-stage-capture";
+import { Spinner } from "../components/Spinner";
 import { TrackerContext } from "../machines/tracker";
 import { ProgramRuleResult } from "../schemas";
 import {
@@ -41,7 +42,6 @@ import {
     flattenTrackedEntity,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
-import { Spinner } from "../components/Spinner";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -70,7 +70,6 @@ function TrackedEntity() {
             (e) => e.programStage === "K2nxbE9ubSs",
         ),
     );
-
     const mainEvent = TrackerContext.useSelector(
         (state) => state.context.mainEvent,
     );
@@ -95,6 +94,7 @@ function TrackedEntity() {
         assignments: {},
         messages: [],
         warnings: [],
+        errors: [],
         shownFields: new Set<string>(),
         hiddenSections: new Set<string>(),
         shownSections: new Set<string>(),
@@ -111,9 +111,7 @@ function TrackedEntity() {
             dataValues,
             attributeValues: attributes,
         });
-
         setRuleResult(result);
-
         for (const [key, value] of Object.entries(result.assignments)) {
             visitForm.setFieldValue(key, value);
         }
@@ -202,12 +200,12 @@ function TrackedEntity() {
     };
 
     useEffect(() => {
-        visitForm.resetFields();
         if (
             mainEvent &&
             mainEvent.dataValues &&
             Object.keys(mainEvent.dataValues).length > 0
         ) {
+            console.log("Setting form values for main event:", attributes);
             const formValues = {
                 occurredAt: mainEvent.occurredAt,
                 ...Object.entries(mainEvent.dataValues).reduce(
@@ -218,14 +216,14 @@ function TrackedEntity() {
                     {},
                 ),
             };
-            setTimeout(() => {
-                visitForm.setFieldsValue(formValues);
-                evaluateRules(formValues);
-            }, 0);
+            // setTimeout(() => {
+            //     visitForm.setFieldsValue(formValues);
+            // }, 0);
+            evaluateRules(formValues);
         } else {
             evaluateRules(mainEvent?.dataValues || {});
         }
-    }, [open, mainEvent]);
+    }, [open, mainEvent, attributes]);
 
     if (isLoading) {
         return <Spinner />;
@@ -378,7 +376,7 @@ function TrackedEntity() {
                 title={
                     <Space>
                         <MedicineBoxOutlined />
-                        <span>"Visit Details"</span>
+                        <span>Visit Details</span>
                     </Space>
                 }
                 open={isVisitModalOpen}
@@ -527,6 +525,31 @@ function TrackedEntity() {
                                                                         },
                                                                     );
 
+                                                                const errors =
+                                                                    ruleResult.errors.filter(
+                                                                        (msg) =>
+                                                                            msg.key ===
+                                                                            dataElement.id,
+                                                                    );
+                                                                const messages =
+                                                                    ruleResult.messages.filter(
+                                                                        (msg) =>
+                                                                            msg.key ===
+                                                                            dataElement.id,
+                                                                    );
+                                                                const warnings =
+                                                                    ruleResult.warnings.filter(
+                                                                        (msg) =>
+                                                                            msg.key ===
+                                                                            dataElement.id,
+                                                                    );
+                                                                const required =
+                                                                    allDataElements.get(
+                                                                        dataElement.id,
+                                                                    )
+                                                                        ?.compulsory ??
+                                                                    false;
+
                                                                 return (
                                                                     <DataElementField
                                                                         dataElement={
@@ -551,6 +574,21 @@ function TrackedEntity() {
                                                                         }
                                                                         finalOptions={
                                                                             finalOptions
+                                                                        }
+                                                                        messages={
+                                                                            messages
+                                                                        }
+                                                                        warnings={
+                                                                            warnings
+                                                                        }
+                                                                        errors={
+                                                                            errors
+                                                                        }
+                                                                        required={
+                                                                            required
+                                                                        }
+                                                                        key={
+                                                                            dataElement.id
                                                                         }
                                                                     />
                                                                 );

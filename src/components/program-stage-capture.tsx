@@ -101,6 +101,7 @@ export const ProgramStageCapture: React.FC<{
         assignments: {},
         messages: [],
         warnings: [],
+        errors: [],
         shownFields: new Set<string>(),
         hiddenSections: new Set<string>(),
         shownSections: new Set<string>(),
@@ -263,6 +264,30 @@ export const ProgramStageCapture: React.FC<{
                                                         },
                                                     );
 
+                                                const errors =
+                                                    ruleResult.errors.filter(
+                                                        (msg) =>
+                                                            msg.key ===
+                                                            dataElement.id,
+                                                    );
+                                                const messages =
+                                                    ruleResult.messages.filter(
+                                                        (msg) =>
+                                                            msg.key ===
+                                                            dataElement.id,
+                                                    );
+                                                const warnings =
+                                                    ruleResult.warnings.filter(
+                                                        (msg) =>
+                                                            msg.key ===
+                                                            dataElement.id,
+                                                    );
+
+                                                const required =
+                                                    allDataElements.get(
+                                                        dataElement.id,
+                                                    )?.compulsory ?? false;
+
                                                 return (
                                                     <DataElementField
                                                         dataElement={
@@ -284,6 +309,11 @@ export const ProgramStageCapture: React.FC<{
                                                         finalOptions={
                                                             finalOptions
                                                         }
+                                                        messages={messages}
+                                                        warnings={warnings}
+                                                        errors={errors}
+                                                        required={required}
+                                                        key={dataElement.id}
                                                     />
                                                 );
                                             },

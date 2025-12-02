@@ -74,6 +74,7 @@ export const TrackedEntityAttributeSchema = z.object({
     pattern: z.string(),
     optionSetValue: z.boolean(),
     displayFormName: z.string(),
+		formName: z.string().optional(),
     id: z.string(),
 });
 
@@ -134,6 +135,8 @@ export const ProgramRuleActionSchema = z.object({
         .object({ id: z.string(), displayName: z.string() })
         .optional(),
     value: z.string().optional(),
+    displayContent: z.string().optional(),
+    content: z.string().optional(),
 });
 
 export const ProgramRuleSchema = z.object({
@@ -303,14 +306,20 @@ export type TrackedEntityAttribute = z.infer<
 >;
 export type EventResponse = z.infer<typeof EventResponseSchema>;
 
+export type Message = {
+    key: string;
+    content: string;
+};
+
 export type ProgramRuleResult = {
     assignments: Record<string, any>;
     hiddenFields: Set<string>;
     shownFields: Set<string>;
     hiddenSections: Set<string>;
     shownSections: Set<string>;
-    messages: string[];
-    warnings: string[];
+    messages: Array<Message>;
+    warnings: Array<Message>;
+    errors: Array<Message>;
     hiddenOptions: Record<string, Set<string>>;
     shownOptions: Record<string, Set<string>>;
     hiddenOptionGroups: Record<string, Set<string>>;
