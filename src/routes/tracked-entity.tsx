@@ -16,8 +16,6 @@ import {
     Descriptions,
     Flex,
     Form,
-    Input,
-    message,
     Modal,
     Row,
     Select,
@@ -25,6 +23,7 @@ import {
     Splitter,
     Table,
     Tabs,
+    Tag,
     Typography,
 } from "antd";
 import dayjs from "dayjs";
@@ -36,11 +35,13 @@ import { TrackerContext } from "../machines/tracker";
 import { ProgramRuleResult } from "../schemas";
 import {
     createEmptyEvent,
+    createGetValueProps,
+    createNormalize,
     executeProgramRules,
     flattenTrackedEntity,
-    isDate,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
+import { Spinner } from "../components/Spinner";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -48,8 +49,6 @@ export const TrackedEntityRoute = createRoute({
 });
 
 const { Text } = Typography;
-const { TextArea } = Input;
-const { Option } = Select;
 
 function TrackedEntity() {
     const {
@@ -75,7 +74,9 @@ function TrackedEntity() {
     const mainEvent = TrackerContext.useSelector(
         (state) => state.context.mainEvent,
     );
-    const state = TrackerContext.useSelector((state) => state.value);
+    const isLoading = TrackerContext.useSelector((state) =>
+        state.matches("loadingEntity"),
+    );
 
     const keys: Map<string, string> = new Map(
         program.programTrackedEntityAttributes.map((attr) => [
@@ -87,10 +88,7 @@ function TrackedEntity() {
     );
 
     const [visitForm] = Form.useForm();
-    const [loading, setLoading] = useState(false);
-
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
-    const [selectedVisit, setSelectedVisit] = useState(null);
 
     const [ruleResult, setRuleResult] = useState<ProgramRuleResult>({
         hiddenFields: new Set<string>(),
@@ -100,14 +98,18 @@ function TrackedEntity() {
         shownFields: new Set<string>(),
         hiddenSections: new Set<string>(),
         shownSections: new Set<string>(),
+        hiddenOptionGroups: {},
+        shownOptionGroups: {},
+        hiddenOptions: {},
+        shownOptions: {},
     });
 
     const evaluateRules = (dataValues: any) => {
-        console.log("Evaluating rules with data values:", dataValues);
         const result = executeProgramRules({
             programRules: programRules.programRules,
             programRuleVariables: programRuleVariables.programRuleVariables,
             dataValues,
+            attributeValues: attributes,
         });
 
         setRuleResult(result);
@@ -118,25 +120,20 @@ function TrackedEntity() {
     };
 
     const onVisitSubmit = (values: Record<string, any>) => {
-        console.log(values);
-        // try {
-        //     const newVisit = {
-        //         key: String(visits.length + 1),
-        //         date: values.date.format("YYYY-MM-DD"),
-        //         reason: values.reason,
-        //         doctor: values.doctor,
-        //         status: values.status,
-        //         diagnosis: values.diagnosis,
-        //         treatment: values.treatment,
-        //         notes: values.notes,
-        //     };
-        //     setVisits([newVisit, ...visits]);
-        //     message.success("Visit added successfully!");
-        //     setIsVisitModalOpen(false);
-        //     visitForm.resetFields();
-        // } catch (error) {
-        //     message.error("Failed to add visit.");
-        // }
+        const { occurredAt, ...dataValues } = values;
+        const event: ReturnType<typeof flattenTrackedEntity>["events"][number] =
+            {
+                ...mainEvent,
+                occurredAt,
+                dataValues: { ...mainEvent.dataValues, ...dataValues },
+            };
+        trackerActor.send({
+            type: "CREATE_OR_UPDATE_EVENT",
+            event,
+        });
+        trackerActor.send({ type: "SAVE_EVENTS" });
+        setIsVisitModalOpen(false);
+        visitForm.resetFields();
     };
 
     const showVisitModal = (
@@ -148,7 +145,6 @@ function TrackedEntity() {
 
     const handleModalClose = () => {
         setIsVisitModalOpen(false);
-        setSelectedVisit(null);
         visitForm.resetFields();
     };
 
@@ -165,6 +161,17 @@ function TrackedEntity() {
             title: "Services",
             dataIndex: ["dataValues", "mrKZWf2WMIC"],
             key: "services",
+            render: (text) => (
+                <Flex gap="small" align="center" wrap>
+                    {text.split(",").map((tag) => {
+                        return (
+                            <Tag key={tag} color="blue">
+                                {tag.toUpperCase()}
+                            </Tag>
+                        );
+                    })}
+                </Flex>
+            ),
         },
         {
             title: "Action",
@@ -173,7 +180,9 @@ function TrackedEntity() {
             render: (_, record) => (
                 <Button
                     icon={<EyeOutlined />}
-                    onClick={() => showVisitModal(record)}
+                    onClick={() => {
+                        showVisitModal(record);
+                    }}
                 >
                     View
                 </Button>
@@ -217,19 +226,25 @@ function TrackedEntity() {
             evaluateRules(mainEvent?.dataValues || {});
         }
     }, [open, mainEvent]);
+
+    if (isLoading) {
+        return <Spinner />;
+    }
+
     return (
         <>
             <Splitter style={{ height: "calc(100vh - 48px)" }}>
                 <Splitter.Panel style={{ padding: 10 }}>
                     <Flex vertical gap="16px">
-                        <Button
-                            onClick={() =>
-                                trackerActor.send({ type: "GO_BACK" })
-                            }
-                        >
-                            Back
-                        </Button>
-                        <Descriptions bordered column={3} items={items} />
+                        <Flex>
+                            <Button
+                                onClick={() =>
+                                    trackerActor.send({ type: "GO_BACK" })
+                                }
+                            >
+                                Back
+                            </Button>
+                        </Flex>
                         <Card
                             title={
                                 <Space>
@@ -242,10 +257,6 @@ function TrackedEntity() {
                                     type="primary"
                                     icon={<PlusOutlined />}
                                     onClick={() => {
-                                        trackerActor.send({
-                                            type: "SET_ACTION",
-                                            action: "CREATE",
-                                        });
                                         showVisitModal(
                                             createEmptyEvent({
                                                 program: enrollment.program,
@@ -262,7 +273,7 @@ function TrackedEntity() {
                                     Add Visit
                                 </Button>
                             }
-                            styles={{ body: { padding: 0, margin: 0 } }}
+                            // styles={{ body: { padding: 0, margin: 0 } }}
                         >
                             <Table
                                 columns={columns}
@@ -275,7 +286,7 @@ function TrackedEntity() {
                 </Splitter.Panel>
 
                 <Splitter.Panel
-                    defaultSize="20%"
+                    defaultSize="25%"
                     collapsible={{
                         start: true,
                         end: true,
@@ -367,40 +378,29 @@ function TrackedEntity() {
                 title={
                     <Space>
                         <MedicineBoxOutlined />
-                        <span>
-                            {selectedVisit ? "Visit Details" : "Add New Visit"}
-                        </span>
+                        <span>"Visit Details"</span>
                     </Space>
                 }
                 open={isVisitModalOpen}
                 onCancel={handleModalClose}
-                footer={
-                    selectedVisit
-                        ? [
-                              <Button key="close" onClick={handleModalClose}>
-                                  Close
-                              </Button>,
-                          ]
-                        : [
-                              <Button key="cancel" onClick={handleModalClose}>
-                                  Cancel
-                              </Button>,
-                              <Button
-                                  key="submit"
-                                  type="primary"
-                                  onClick={() => visitForm.submit()}
-                              >
-                                  Add Visit
-                              </Button>,
-                          ]
-                }
+                footer={[
+                    <Button key="cancel" onClick={handleModalClose}>
+                        Cancel
+                    </Button>,
+                    <Button
+                        key="submit"
+                        type="primary"
+                        onClick={() => visitForm.submit()}
+                    >
+                        {"Update/Create Visit"}
+                    </Button>,
+                ]}
                 width="90vw"
                 styles={{
                     body: {
-                        maxHeight: "70vh",
-                        overflow: "auto",
-                        padding: 0,
+                        height: "70vh",
                         margin: 0,
+                        padding: 0,
                     },
                 }}
             >
@@ -408,8 +408,11 @@ function TrackedEntity() {
                     form={visitForm}
                     layout="vertical"
                     onFinish={onVisitSubmit}
-                    disabled={!!selectedVisit}
                     onValuesChange={handleValuesChange}
+                    initialValues={{
+                        ...mainEvent.dataValues,
+                        occurredAt: mainEvent.occurredAt,
+                    }}
                     style={{ margin: 0, padding: 0 }}
                 >
                     <Flex vertical style={{ padding: 12 }}>
@@ -425,14 +428,8 @@ function TrackedEntity() {
                                                 "Please select visit date!",
                                         },
                                     ]}
-                                    getValueProps={(value) => ({
-                                        value: value ? dayjs(value) : null,
-                                    })}
-                                    normalize={(value) =>
-                                        dayjs.isDayjs(value)
-                                            ? value.format("YYYY-MM-DD")
-                                            : value
-                                    }
+                                    getValueProps={createGetValueProps("DATE")}
+                                    normalize={createNormalize("DATE")}
                                 >
                                     <DatePicker style={{ width: "100%" }} />
                                 </Form.Item>
@@ -448,6 +445,10 @@ function TrackedEntity() {
                                                 "Please select service type!",
                                         },
                                     ]}
+                                    getValueProps={createGetValueProps(
+                                        "MULTI_TEXT",
+                                    )}
+                                    normalize={createNormalize("MULTI_TEXT")}
                                 >
                                     <Select
                                         style={{ width: "100%" }}
@@ -478,9 +479,6 @@ function TrackedEntity() {
                                         children: (
                                             <ProgramStageCapture
                                                 programStage={stage}
-                                                occurredAt={dayjs().format(
-                                                    "YYYY-MM-DD",
-                                                )}
                                             />
                                         ),
                                     };
@@ -502,11 +500,34 @@ function TrackedEntity() {
                                                     section.name,
                                                 children: (
                                                     <Row gutter={24}>
-                                                        {section.dataElements.map(
-                                                            (dataElement) =>
-                                                                ruleResult.hiddenFields.has(
-                                                                    dataElement.id,
-                                                                ) ? null : (
+                                                        {section.dataElements.flatMap(
+                                                            (dataElement) => {
+                                                                if (
+                                                                    ruleResult.hiddenFields.has(
+                                                                        dataElement.id,
+                                                                    )
+                                                                ) {
+                                                                    return [];
+                                                                }
+
+                                                                const finalOptions =
+                                                                    dataElement.optionSet?.options.flatMap(
+                                                                        (o) => {
+                                                                            if (
+                                                                                ruleResult.hiddenOptions[
+                                                                                    dataElement
+                                                                                        .id
+                                                                                ]?.has(
+                                                                                    o.id,
+                                                                                )
+                                                                            ) {
+                                                                                return [];
+                                                                            }
+                                                                            return o;
+                                                                        },
+                                                                    );
+
+                                                                return (
                                                                     <DataElementField
                                                                         dataElement={
                                                                             dataElement
@@ -528,8 +549,12 @@ function TrackedEntity() {
                                                                                 ?.vertical ??
                                                                             false
                                                                         }
+                                                                        finalOptions={
+                                                                            finalOptions
+                                                                        }
                                                                     />
-                                                                ),
+                                                                );
+                                                            },
                                                         )}
                                                     </Row>
                                                 ),
@@ -538,6 +563,18 @@ function TrackedEntity() {
                                     },
                                 );
                             })}
+                            styles={{
+                                content: {
+                                    height: "62vh",
+                                    overflow: "auto",
+                                    padding: 12,
+                                    margin: 0,
+                                },
+                                header: {
+                                    height: "62vh",
+                                    overflow: "auto",
+                                },
+                            }}
                         />
                     </Flex>
                 </Form>

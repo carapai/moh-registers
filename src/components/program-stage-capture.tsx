@@ -2,7 +2,6 @@ import { CalendarOutlined, EyeOutlined, PlusOutlined } from "@ant-design/icons";
 import {
     Button,
     Card,
-    Col,
     Flex,
     Form,
     Modal,
@@ -12,23 +11,21 @@ import {
     TableProps,
 } from "antd";
 import dayjs from "dayjs";
+import { set } from "lodash";
 import React, { useEffect, useState } from "react";
 import { TrackerContext } from "../machines/tracker";
+import { RootRoute } from "../routes/__root";
 import { ProgramRuleResult, ProgramStage } from "../schemas";
 import {
     createEmptyEvent,
     executeProgramRules,
     flattenTrackedEntity,
-    isDate,
 } from "../utils/utils";
 import { DataElementField } from "./data-element-field";
-import { RootRoute } from "../routes/__root";
-import { set } from "lodash";
 
 export const ProgramStageCapture: React.FC<{
     programStage: ProgramStage;
-    occurredAt: string;
-}> = ({ programStage, occurredAt }) => {
+}> = ({ programStage }) => {
     const [stageForm] = Form.useForm();
     const { allDataElements, programRuleVariables, programRules } =
         RootRoute.useLoaderData();
@@ -76,10 +73,6 @@ export const ProgramStageCapture: React.FC<{
                 <Button
                     icon={<EyeOutlined />}
                     onClick={() => {
-                        trackerActor.send({
-                            type: "SET_ACTION",
-                            action: "UPDATE",
-                        });
                         showVisitModal(record);
                     }}
                 >
@@ -89,12 +82,12 @@ export const ProgramStageCapture: React.FC<{
         },
     ];
 
-    const onStageSubmit = (records: Record<string, any>) => {
+    const onStageSubmit = (values: Record<string, any>) => {
         const event: ReturnType<typeof flattenTrackedEntity>["events"][number] =
             {
                 ...currentEvent,
                 occurredAt: mainEvent.occurredAt,
-                dataValues: { ...currentEvent.dataValues, ...records },
+                dataValues: { ...currentEvent.dataValues, ...values },
             };
         trackerActor.send({
             type: "CREATE_OR_UPDATE_EVENT",
@@ -111,6 +104,10 @@ export const ProgramStageCapture: React.FC<{
         shownFields: new Set<string>(),
         hiddenSections: new Set<string>(),
         shownSections: new Set<string>(),
+        hiddenOptionGroups: {},
+        shownOptionGroups: {},
+        hiddenOptions: {},
+        shownOptions: {},
     });
 
     const evaluateRules = (dataValues: any) => {
@@ -171,10 +168,6 @@ export const ProgramStageCapture: React.FC<{
                         type="primary"
                         icon={<PlusOutlined />}
                         onClick={() => {
-                            trackerActor.send({
-                                type: "SET_ACTION",
-                                action: "CREATE",
-                            });
                             showVisitModal(
                                 createEmptyEvent({
                                     program: enrollment.program,
@@ -251,8 +244,25 @@ export const ProgramStageCapture: React.FC<{
                                                     ruleResult.hiddenFields.has(
                                                         dataElement.id,
                                                     )
-                                                )
+                                                ) {
                                                     return [];
+                                                }
+
+                                                const finalOptions =
+                                                    dataElement.optionSet?.options.flatMap(
+                                                        (o) => {
+                                                            if (
+                                                                ruleResult.hiddenOptions[
+                                                                    dataElement
+                                                                        .id
+                                                                ]?.has(o.id)
+                                                            ) {
+                                                                return [];
+                                                            }
+                                                            return o;
+                                                        },
+                                                    );
+
                                                 return (
                                                     <DataElementField
                                                         dataElement={
@@ -270,6 +280,9 @@ export const ProgramStageCapture: React.FC<{
                                                             allDataElements.get(
                                                                 dataElement.id,
                                                             )?.vertical ?? false
+                                                        }
+                                                        finalOptions={
+                                                            finalOptions
                                                         }
                                                     />
                                                 );

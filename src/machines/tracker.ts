@@ -1,3 +1,4 @@
+import { ProgramTrackedEntityAttribute } from "./../../.d2/shell/src/D2App/schemas";
 import { useDataEngine } from "@dhis2/app-runtime";
 import { createActorContext } from "@xstate/react";
 import { assign, fromPromise, setup } from "xstate";
@@ -9,8 +10,14 @@ import {
     flattenTrackedEntityResponse,
 } from "../utils/utils";
 import { resourceQueryOptions } from "../query-options";
-import { OrgUnit, TrackedEntity, TrackedEntityResponse } from "../schemas";
+import {
+    OnChange,
+    OrgUnit,
+    TrackedEntity,
+    TrackedEntityResponse,
+} from "../schemas";
 import { UseNavigateResult } from "@tanstack/react-router";
+import { isEmpty } from "lodash";
 
 interface TrackerContext {
     trackedEntities: ReturnType<typeof flattenTrackedEntityResponse>;
@@ -18,11 +25,14 @@ interface TrackerContext {
     trackedEntityId?: string;
     error?: string;
     engine: ReturnType<typeof useDataEngine>;
-    action: "CREATE" | "UPDATE";
     navigate: UseNavigateResult<"/">;
     organisationUnits: OrgUnit[];
     currentEvent: ReturnType<typeof flattenTrackedEntity>["events"][number];
     mainEvent: ReturnType<typeof flattenTrackedEntity>["events"][number];
+    orgUnit: string;
+    programTrackedEntityAttributes: ProgramTrackedEntityAttribute[];
+    eventUpdates: string[];
+    search: OnChange;
 }
 
 type TrackerEvents =
@@ -30,14 +40,6 @@ type TrackerEvents =
     | { type: "GO_BACK" }
     | {
           type: "CREATE_TRACKED_ENTITY";
-      }
-    | {
-          type: "SET_ACTION";
-          action: "CREATE" | "UPDATE";
-      }
-    | {
-          type: "NEXT_ACTION";
-          action: string;
       }
     | {
           type: "SET_TRACKED_ENTITIES";
@@ -51,11 +53,27 @@ type TrackerEvents =
           type: "CREATE_OR_UPDATE_EVENT";
           event: ReturnType<typeof flattenTrackedEntity>["events"][number];
       }
+    | { type: "FETCH_NEXT_PAGE"; search: OnChange }
+    | {
+          type: "SET_ORG_UNIT";
+          orgUnit: string;
+      }
     | {
           type: "SET_CURRENT_EVENT";
           currentEvent: ReturnType<
               typeof flattenTrackedEntity
           >["events"][number];
+      }
+    | {
+          type: "TOGGLE_ATTRIBUTE_COLUMN";
+          attributeId: string;
+      }
+    | {
+          type: "ADD_EVENT_UPDATE";
+          id: string;
+      }
+    | {
+          type: "SAVE_EVENTS";
       }
     | {
           type: "SET_MAIN_EVENT";
@@ -73,27 +91,57 @@ export const trackerMachine = setup({
             engine: ReturnType<typeof useDataEngine>;
             navigate: UseNavigateResult<"/">;
             organisationUnits: OrgUnit[];
+            programTrackedEntityAttributes: ProgramTrackedEntityAttribute[];
         },
     },
     actors: {
         fetchTrackedEntities: fromPromise<
-            ReturnType<typeof flattenTrackedEntityResponse>,
+            {
+                instances: ReturnType<typeof flattenTrackedEntityResponse>;
+                total: number;
+            },
             {
                 engine: ReturnType<typeof useDataEngine>;
+                orgUnits: string;
+                search: OnChange;
             }
-        >(async ({ input: { engine } }) => {
+        >(async ({ input: { engine, orgUnits, search } }) => {
+            const params = new URLSearchParams({
+                pageSize: `${search.pagination.pageSize || 10}`,
+                page: `${search.pagination.current || 1}`,
+                totalPages: "true",
+                program: "ueBhWkWll5v",
+                orgUnitMode: "SELECTED",
+                orgUnits,
+                order: "updatedAt:DESC",
+                fields: "trackedEntity,orgUnit,createdAt,updatedAt,inactive,attributes,enrollments[enrolledAt,occurredAt,status],programOwners",
+            });
+
+            for (const [filterKey, filterValues] of Object.entries(
+                search?.filters || {},
+            )) {
+                if (filterValues && filterValues.length > 0) {
+                    params.append(
+                        `filter`,
+                        `${filterKey}:eq:${filterValues[0]}`,
+                    );
+                }
+            }
             const data = await queryClient.fetchQuery(
                 resourceQueryOptions<TrackedEntityResponse>({
                     engine,
-                    resource: "tracker/trackedEntities",
-                    params: {
-                        program: "ueBhWkWll5v",
-                        orgUnitMode: "SELECTED",
-                        orgUnits: "FvewOonC8lS",
-                    },
+                    resource: `tracker/trackedEntities?${params.toString()}`,
+                    queryKey: [
+                        "trackedEntities",
+                        orgUnits,
+                        Array.from(params.values()).sort().join(","),
+                    ],
                 }),
             );
-            return flattenTrackedEntityResponse(data);
+            return {
+                instances: flattenTrackedEntityResponse(data),
+                total: data.pager.total,
+            };
         }),
         fetchTrackedEntity: fromPromise<
             ReturnType<typeof flattenTrackedEntity>,
@@ -115,6 +163,42 @@ export const trackerMachine = setup({
             );
             return flattenTrackedEntity(data);
         }),
+        createOrUpdateEvents: fromPromise<
+            void,
+            {
+                engine: ReturnType<typeof useDataEngine>;
+                events: ReturnType<typeof flattenTrackedEntity>["events"];
+            }
+        >(async ({ input: { engine, events } }) => {
+            const allEvents = events.map(({ dataValues, ...event }) => {
+                return {
+                    ...event,
+                    dataValues: Object.entries(dataValues).flatMap(
+                        ([dataElement, value]) => {
+                            if (!isEmpty(value)) {
+                                if (Array.isArray(value)) {
+                                    return {
+                                        dataElement,
+                                        value: value.join(","),
+                                    };
+                                }
+                                return {
+                                    dataElement,
+                                    value,
+                                };
+                            }
+                            return [];
+                        },
+                    ),
+                };
+            });
+            const response = await engine.mutate({
+                resource: "tracker",
+                type: "create",
+                data: { events: allEvents },
+                params: { async: false },
+            });
+        }),
     },
     actions: {
         gotoEntities: ({ context }) => {
@@ -128,16 +212,25 @@ export const trackerMachine = setup({
                 },
             });
         },
+        resetTrackedEntities: assign({
+            trackedEntities: () => [],
+        }),
     },
 }).createMachine({
     id: "tracker",
     initial: "loading",
-    context: ({ input: { engine, navigate, organisationUnits } }) => {
+    context: ({
+        input: {
+            engine,
+            navigate,
+            organisationUnits,
+            programTrackedEntityAttributes,
+        },
+    }) => {
         return {
             trackedEntities: [],
             engine,
             navigate,
-            action: "CREATE",
             organisationUnits,
             trackedEntity: createEmptyTrackedEntity({ orgUnit: "" }),
             currentEvent: createEmptyEvent({
@@ -155,20 +248,38 @@ export const trackerMachine = setup({
                 programStage: "K2nxbE9ubSs",
             }),
             trackedEntityId: "",
+            programTrackedEntityAttributes,
+            orgUnit: organisationUnits[0]?.id || "",
+            eventUpdates: [],
+            search: {
+                pagination: { current: 1, pageSize: 10, total: 0 },
+                filters: {},
+            },
         };
     },
     states: {
         loading: {
-            entry: "gotoEntities",
+            entry: ["gotoEntities", "resetTrackedEntities"],
             invoke: {
                 src: "fetchTrackedEntities",
-                input: ({ context: { engine } }) => {
-                    return { engine };
+                input: ({ context: { engine, orgUnit, search } }) => {
+                    return {
+                        engine,
+                        orgUnits: orgUnit,
+                        search,
+                    };
                 },
                 onDone: {
                     target: "success",
                     actions: assign({
-                        trackedEntities: ({ event }) => event.output,
+                        trackedEntities: ({ event }) => event.output.instances,
+                        search: ({ event, context }) => ({
+                            ...context.search,
+                            pagination: {
+                                ...context.search.pagination,
+                                total: event.output.total,
+                            },
+                        }),
                     }),
                 },
                 onError: {
@@ -185,15 +296,44 @@ export const trackerMachine = setup({
 
         success: {
             on: {
-                SET_ACTION: {
-                    actions: assign({
-                        action: ({ event }) => event.action,
-                    }),
-                },
                 SET_TRACKED_ENTITY_ID: {
                     target: "loadingEntity",
                     actions: assign({
                         trackedEntityId: ({ event }) => event.trackedEntityId,
+                    }),
+                },
+                SET_ORG_UNIT: {
+                    target: "loading",
+                    actions: assign({
+                        orgUnit: ({ event }) => event.orgUnit,
+                    }),
+                },
+
+                FETCH_NEXT_PAGE: {
+                    target: "loading",
+                    actions: assign({
+                        search: ({ event }) => event.search,
+                    }),
+                },
+                CREATE_TRACKED_ENTITY: {},
+                TOGGLE_ATTRIBUTE_COLUMN: {
+                    actions: assign({
+                        programTrackedEntityAttributes: ({
+                            context,
+                            event,
+                        }) => {
+                            return context.programTrackedEntityAttributes.map(
+                                (attr) => {
+                                    if (attr.id === event.attributeId) {
+                                        return {
+                                            ...attr,
+                                            displayInList: !attr.displayInList,
+                                        };
+                                    }
+                                    return attr;
+                                },
+                            );
+                        },
                     }),
                 },
             },
@@ -241,11 +381,22 @@ export const trackerMachine = setup({
                         },
                     }),
                 },
+
+                ADD_EVENT_UPDATE: {
+                    actions: assign({
+                        eventUpdates: ({ context, event }) => {
+                            return [...context.eventUpdates, event.id];
+                        },
+                    }),
+                },
+
                 CREATE_OR_UPDATE_EVENT: {
-                    // target: "optimisticUpdate",
                     actions: assign({
                         trackedEntity: ({ context, event }) => {
-                            if (context.action === "CREATE") {
+                            const search = context.trackedEntity.events.find(
+                                (e) => e.event === event.event.event,
+                            );
+                            if (search === undefined) {
                                 return {
                                     ...context.trackedEntity,
                                     events: [
@@ -265,11 +416,41 @@ export const trackerMachine = setup({
                                 };
                             }
                         },
+                        eventUpdates: ({ context, event }) => {
+                            return [...context.eventUpdates, event.event.event];
+                        },
                     }),
                 },
+                SAVE_EVENTS: "optimisticUpdate",
             },
         },
         optimisticUpdate: {
+            invoke: {
+                src: "createOrUpdateEvents",
+                input: ({
+                    context: { engine, trackedEntity, eventUpdates },
+                }) => {
+                    return {
+                        engine,
+                        events: trackedEntity.events.filter((event) =>
+                            eventUpdates.includes(event.event),
+                        ),
+                    };
+                },
+                onDone: {
+                    target: "entitySuccess",
+                },
+                onError: {
+                    target: "failure",
+                    actions: assign({
+                        error: ({ event }) =>
+                            event.error instanceof Error
+                                ? event.error.message
+                                : String(event.error),
+                    }),
+                },
+            },
+
             on: {
                 SET_CURRENT_EVENT: {
                     actions: assign({

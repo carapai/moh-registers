@@ -20,7 +20,6 @@ export const RootRoute = createRootRouteWithContext<{
             }>({
                 engine,
                 resource: "optionSets/QwsvSPpnRul/options",
-                params: {},
             }),
         );
         const program = await queryClient.ensureQueryData(
@@ -29,7 +28,7 @@ export const RootRoute = createRootRouteWithContext<{
                 resource: "programs",
                 id: "ueBhWkWll5v",
                 params: {
-                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]],programRuleVariables[*],programRules[*,programRuleActions[*]]",
+                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,optionSet[id,name,options[id,name,code]]]]",
                 },
             }),
         );
@@ -117,11 +116,17 @@ export const RootRoute = createRootRouteWithContext<{
 function RootRouteComponent() {
     const { engine } = RootRoute.useRouteContext();
     const navigate = RootRoute.useNavigate();
-    const { organisationUnits } = RootRoute.useLoaderData();
+    const { organisationUnits, program } = RootRoute.useLoaderData();
     return (
         <TrackerContext.Provider
             options={{
-                input: { engine, navigate, organisationUnits },
+                input: {
+                    engine,
+                    navigate,
+                    organisationUnits,
+                    programTrackedEntityAttributes:
+                        program.programTrackedEntityAttributes,
+                },
             }}
         >
             <Flex
@@ -130,6 +135,7 @@ function RootRouteComponent() {
                     height: "calc(100vh - 48px)",
                     minHeight: "calc(100vh - 48px)",
                     padding: 10,
+                    backgroundColor: "#f5f5f5",
                 }}
             >
                 <Outlet />

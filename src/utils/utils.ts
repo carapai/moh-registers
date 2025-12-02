@@ -1,24 +1,26 @@
+import { FormItemProps, TableProps } from "antd";
 import dayjs from "dayjs";
-import { TableProps } from "antd";
 import {
-    ProgramRule,
-    ProgramRuleResult,
-    ProgramRuleVariable,
-    ProgramTrackedEntityAttribute,
-    TrackedEntity,
-    TrackedEntityResponse,
+	ProgramRule,
+	ProgramRuleResult,
+	ProgramRuleVariable,
+	ProgramTrackedEntityAttribute,
+	TrackedEntity,
+	TrackedEntityResponse
 } from "../schemas";
 import { generateUid } from "./id";
 
 export const flattenTrackedEntityResponse = (te: TrackedEntityResponse) => {
     return te.trackedEntities.flatMap(
         ({ attributes, enrollments, ...rest }) => {
+            const [{ occurredAt, enrolledAt }] = enrollments;
             return {
                 ...rest,
                 attributes: attributes.reduce((acc, attr) => {
                     acc[attr.attribute] = attr.value;
                     return acc;
                 }, {}),
+                enrollment: { occurredAt, enrolledAt },
             };
         },
     );
@@ -84,12 +86,12 @@ export function executeProgramRules({
     programRules,
     programRuleVariables,
     dataValues,
-    attributeValues = {}, // Add attribute values parameter
+    attributeValues = {},
 }: {
     programRules: ProgramRule[];
     programRuleVariables: ProgramRuleVariable[];
     dataValues: Record<string, any>;
-    attributeValues?: Record<string, any>; // Optional attribute values
+    attributeValues?: Record<string, any>;
 }): ProgramRuleResult {
     const variableValues: Record<string, any> = {};
 
@@ -409,6 +411,10 @@ export function executeProgramRules({
         shownFields: new Set(),
         hiddenSections: new Set(),
         shownSections: new Set(),
+        hiddenOptions: {},
+        shownOptions: {},
+        hiddenOptionGroups: {},
+        shownOptionGroups: {},
         messages: [],
         warnings: [],
     };
@@ -453,6 +459,74 @@ export function executeProgramRules({
                     }
                     break;
 
+                case "HIDEOPTION":
+                    {
+                        const targetId =
+                            action.dataElement?.id ||
+                            action.trackedEntityAttribute?.id;
+                        if (targetId && action.option) {
+                            if (!result.hiddenOptions[targetId]) {
+                                result.hiddenOptions[targetId] = new Set();
+                            }
+                            result.hiddenOptions[targetId].add(
+                                action.option.id,
+                            );
+                        }
+                    }
+                    break;
+
+                case "SHOWOPTION":
+                    {
+                        const targetId =
+                            action.dataElement?.id ||
+                            action.trackedEntityAttribute?.id;
+                        if (targetId && action.option) {
+                            if (!result.shownOptions[targetId]) {
+                                result.shownOptions[targetId] = new Set();
+                            }
+                            result.shownOptions[targetId].add(action.option.id);
+                            console.log(
+                                "Shown option:",
+                                action.option.id,
+                                "for field:",
+                                targetId,
+                            );
+                        }
+                    }
+                    break;
+
+                case "HIDEOPTIONGROUP":
+                    {
+                        const targetId =
+                            action.dataElement?.id ||
+                            action.trackedEntityAttribute?.id;
+                        if (targetId && action.optionGroup) {
+                            if (!result.hiddenOptionGroups[targetId]) {
+                                result.hiddenOptionGroups[targetId] = new Set();
+                            }
+                            result.hiddenOptionGroups[targetId].add(
+                                action.optionGroup.id,
+                            );
+                        }
+                    }
+                    break;
+
+                case "SHOWOPTIONGROUP":
+                    {
+                        const targetId =
+                            action.dataElement?.id ||
+                            action.trackedEntityAttribute?.id;
+                        if (targetId && action.optionGroup) {
+                            if (!result.shownOptionGroups[targetId]) {
+                                result.shownOptionGroups[targetId] = new Set();
+                            }
+                            result.shownOptionGroups[targetId].add(
+                                action.optionGroup.id,
+                            );
+                        }
+                    }
+                    break;
+
                 case "DISPLAYTEXT":
                     if (action.value) {
                         result.messages.push(action.value);
@@ -478,12 +552,18 @@ export function executeProgramRules({
 }
 
 export const isDate = (valueType: string | undefined) => {
-    return (
-        valueType === "DATE" ||
-        valueType === "DATETIME" ||
-        valueType === "TIME" ||
-        valueType === "AGE"
-    );
+    return ["DATE", "DATETIME", "TIME", "AGE"].includes(valueType || "");
+};
+
+export const isNumber = (valueType: string | undefined) => {
+    return [
+        "NUMBER",
+        "INTEGER",
+        "INTEGER_POSITIVE",
+        "INTEGER_NEGATIVE",
+        "PERCENTAGE",
+        "UNIT_INTERVAL",
+    ].includes(valueType || "");
 };
 
 export const createEmptyTrackedEntity = ({
@@ -525,13 +605,13 @@ export const createEmptyEvent = ({
     program,
     trackedEntity,
     enrollment,
-		programStage
+    programStage,
 }: {
     orgUnit: string;
     program: string;
     trackedEntity: string;
     enrollment: string;
-		programStage: string;
+    programStage: string;
 }): ReturnType<typeof flattenTrackedEntity>["events"][number] => {
     const eventId = generateUid();
     return {
@@ -543,10 +623,46 @@ export const createEmptyEvent = ({
         enrollment,
         dataValues: {},
         status: "ACTIVE",
-        occurredAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        occurredAt: dayjs().format("YYYY-MM-DD"),
         followUp: false,
         deleted: false,
-        createdAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
-        updatedAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+        createdAt: dayjs().format("YYYY-MM-DD"),
+        updatedAt: dayjs().format("YYYY-MM-DD"),
     };
+};
+
+export const createNormalize = (valueType: string | undefined) => {
+    const normalize: FormItemProps["normalize"] = (value) => {
+        if (isDate(valueType) && dayjs.isDayjs(value)) {
+            return value.format("YYYY-MM-DD");
+        } else if (value && valueType === "MULTI_TEXT") {
+            return Array.isArray(value) ? value.join(",") : value;
+        }
+        return value;
+    };
+    return normalize;
+};
+export const createGetValueProps = (valueType: string | undefined) => {
+    const getValueProps: FormItemProps["getValueProps"] = (value) => {
+        if (isDate(valueType) || valueType === "MULTI_TEXT") {
+            if (value && isDate(valueType)) {
+                return {
+                    value: value ? dayjs(value) : null,
+                };
+            }
+            if (value) {
+                if (typeof value === "string") {
+                    return {
+                        value: value ? value.split(",").filter(Boolean) : [],
+                    };
+                }
+                if (Array.isArray(value)) {
+                    return { value };
+                }
+                return { value: [] };
+            }
+        }
+        return { value };
+    };
+    return getValueProps;
 };

@@ -1,11 +1,16 @@
-import React from "react";
+import React, { FC } from "react";
 import { Loading3QuartersOutlined } from "@ant-design/icons";
 import { Flex, Spin } from "antd";
 
-export default function Spinner() {
+export const Spinner: FC<{ height?: string }> = ({ height }) => {
     return (
-        <Flex justify="center" align="center" style={{ height: "100%" }}>
+        <Flex
+            justify="center"
+            align="center"
+            style={{ height: height || "calc(100vh - 48px)" }}
+            vertical
+        >
             <Spin indicator={<Loading3QuartersOutlined spin />} />
         </Flex>
     );
-}
+};

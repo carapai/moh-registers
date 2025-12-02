@@ -1,41 +1,35 @@
-import React from "react";
-import { DataElement, ProgramStage } from "../schemas";
 import {
-    Button,
-    Card,
     Checkbox,
     Col,
-    Collapse,
     DatePicker,
-    Descriptions,
-    Flex,
     Form,
     Input,
     InputNumber,
-    message,
-    Modal,
     Radio,
-    Row,
     Select,
-    Space,
-    Splitter,
-    Table,
-    Tabs,
-    Typography,
 } from "antd";
-import { isDate } from "lodash";
-import dayjs from "dayjs";
+import React from "react";
 import { RootRoute } from "../routes/__root";
+import { DataElement, OptionSet } from "../schemas";
+import { createGetValueProps, createNormalize } from "../utils/utils";
 
 export const DataElementField: React.FC<{
     dataElement: DataElement;
     hidden: boolean;
     renderOptionsAsRadio: boolean;
     vertical: boolean;
-}> = ({ dataElement, hidden, renderOptionsAsRadio, vertical }) => {
+    finalOptions?: OptionSet["options"];
+}> = ({
+    dataElement,
+    hidden,
+    renderOptionsAsRadio,
+    vertical,
+    finalOptions,
+}) => {
     const { allDataElements } = RootRoute.useLoaderData();
-    let element: React.ReactNode = <Input />;
     if (hidden) return null;
+    let element: React.ReactNode = <Input />;
+
     if (
         dataElement.optionSetValue &&
         dataElement.optionSet &&
@@ -43,7 +37,7 @@ export const DataElementField: React.FC<{
     ) {
         element = (
             <Select
-                options={dataElement.optionSet.options.map((o) => ({
+                options={finalOptions?.flatMap((o) => ({
                     label: o.name,
                     value: o.code,
                 }))}
@@ -70,7 +64,7 @@ export const DataElementField: React.FC<{
     ) {
         element = (
             <Radio.Group vertical={vertical}>
-                {dataElement.optionSet.options.map((o) => (
+                {finalOptions?.map((o) => (
                     <Radio key={o.code} value={o.code}>
                         {o.name}
                     </Radio>
@@ -109,6 +103,7 @@ export const DataElementField: React.FC<{
             />
         );
     }
+
     return (
         <Col span={8} key={dataElement.id}>
             <Form.Item
@@ -120,21 +115,8 @@ export const DataElementField: React.FC<{
                 }
                 name={dataElement.id}
                 required={allDataElements.get(dataElement.id)?.compulsory}
-                getValueProps={
-                    isDate(dataElement?.valueType)
-                        ? (value) =>
-                              isDate(dataElement?.valueType)
-                                  ? {
-                                        value: value ? dayjs(value) : null,
-                                    }
-                                  : {}
-                        : undefined
-                }
-                normalize={(value) =>
-                    isDate(dataElement?.valueType) && dayjs.isDayjs(value)
-                        ? value.format("YYYY-MM-DD")
-                        : value
-                }
+                getValueProps={createGetValueProps(dataElement.valueType)}
+                normalize={createNormalize(dataElement.valueType)}
             >
                 {element}
             </Form.Item>

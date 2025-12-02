@@ -5,10 +5,23 @@ import { App, ConfigProvider } from "antd";
 import React, { FC } from "react";
 import { queryClient } from "./query-client";
 import { router } from "./router";
+import "./app.css";
 const Registers: FC = () => {
     const engine = useDataEngine();
     return (
-        <ConfigProvider>
+        <ConfigProvider
+            theme={{
+                components: {
+                    Table: {
+                        rowHoverBg: "#F1EFFD",
+                        borderRadius: 0,
+                    },
+                },
+                token: {
+                    fontSize: 16,
+                },
+            }}
+        >
             <App>
                 <QueryClientProvider client={queryClient}>
                     <RouterProvider router={router} context={{ engine }} />

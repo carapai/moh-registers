@@ -1,11 +1,11 @@
 import { QueryClient } from "@tanstack/react-query";
 import {
-	createHashHistory,
-	createRouter,
-	ErrorComponent,
+    createHashHistory,
+    createRouter,
+    ErrorComponent,
 } from "@tanstack/react-router";
 import React from "react";
-import Spinner from "./components/Spinner";
+import { Spinner } from "./components/Spinner";
 import { RootRoute } from "./routes/__root";
 import { IndexRoute } from "./routes/index";
 import { TrackedEntitiesRoute } from "./routes/tracked-entities";

@@ -1,3 +1,5 @@
+import { TablePaginationConfig } from "antd";
+import { FilterValue } from "antd/es/table/interface";
 import z from "zod";
 
 export const UserSchema = z.object({
@@ -107,6 +109,10 @@ export const ProgramRuleActionSchema = z.object({
         "SHOWWARNING",
         "HIDESECTION",
         "SHOWSECTION",
+        "HIDEOPTION",
+        "SHOWOPTION",
+        "HIDEOPTIONGROUP",
+        "SHOWOPTIONGROUP",
     ]),
     dataElement: z
         .object({ displayName: z.string(), id: z.string() })
@@ -219,7 +225,7 @@ export const EnrollmentsSchema = z.object({
     occurredAt: z.string(),
     followUp: z.boolean(),
     deleted: z.boolean(),
-    createdBy: 	UserSchema.optional(),
+    createdBy: UserSchema.optional(),
     updatedBy: UserSchema.optional(),
     events: z.array(EventSchema),
     relationships: z.array(z.unknown()).optional(),
@@ -241,13 +247,15 @@ export const TrackedEntitySchema = z.object({
     attributes: z.array(AttributeSchema),
     createdAtClient: z.string(),
     enrollments: z.array(EnrollmentsSchema),
-    programOwners: z.array(
-        z.object({
-            orgUnit: z.string(),
-            trackedEntity: z.string(),
-            program: z.string(),
-        }),
-    ).optional(),
+    programOwners: z
+        .array(
+            z.object({
+                orgUnit: z.string(),
+                trackedEntity: z.string(),
+                program: z.string(),
+            }),
+        )
+        .optional(),
 });
 
 export const TrackedEntityResponseSchema = z.object({
@@ -255,8 +263,19 @@ export const TrackedEntityResponseSchema = z.object({
         page: z.number(),
         pageSize: z.number(),
         nextPage: z.string(),
+        total: z.number(),
     }),
     trackedEntities: z.array(TrackedEntitySchema),
+});
+
+export const EventResponseSchema = z.object({
+    pager: z.object({
+        page: z.number(),
+        pageSize: z.number(),
+        nextPage: z.string(),
+        total: z.number(),
+    }),
+    events: z.array(EventSchema),
 });
 
 export type Client = z.infer<typeof ClientSchema>;
@@ -282,6 +301,7 @@ export type User = z.infer<typeof UserSchema>;
 export type TrackedEntityAttribute = z.infer<
     typeof TrackedEntityAttributeSchema
 >;
+export type EventResponse = z.infer<typeof EventResponseSchema>;
 
 export type ProgramRuleResult = {
     assignments: Record<string, any>;
@@ -291,4 +311,13 @@ export type ProgramRuleResult = {
     shownSections: Set<string>;
     messages: string[];
     warnings: string[];
+    hiddenOptions: Record<string, Set<string>>;
+    shownOptions: Record<string, Set<string>>;
+    hiddenOptionGroups: Record<string, Set<string>>;
+    shownOptionGroups: Record<string, Set<string>>;
+};
+
+export type OnChange = {
+    pagination: TablePaginationConfig;
+    filters: Record<string, FilterValue | null>;
 };

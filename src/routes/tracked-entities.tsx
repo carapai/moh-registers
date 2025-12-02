@@ -1,11 +1,12 @@
-import { createRoute, Outlet } from "@tanstack/react-router";
-import { Flex, Table } from "antd";
-import React from "react";
+import { createRoute } from "@tanstack/react-router";
+import { Checkbox, Flex, Space } from "antd";
+import React, { useState } from "react";
+import { Spinner } from "../components/Spinner";
+import PatientListScreen from "../components/patient-list";
 import OrgUnitTreeSelect from "../components/tree-select";
+import { TrackerContext } from "../machines/tracker";
 import { ClientSchema } from "../schemas";
 import { RootRoute } from "./__root";
-import { TrackerContext } from "../machines/tracker";
-import { getAttributes } from "../utils/utils";
 export const TrackedEntitiesRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entities",
@@ -14,31 +15,25 @@ export const TrackedEntitiesRoute = createRoute({
 });
 
 function TrackedEntities() {
-    const { orgUnits } = TrackedEntitiesRoute.useSearch();
-    const { program } = RootRoute.useLoaderData();
-    const trackedEntities = TrackerContext.useSelector(
-        (state) => state.context.trackedEntities,
-    );
     const trackerActor = TrackerContext.useActorRef();
+
+    const orgUnit = TrackerContext.useSelector(
+        (state) => state.context.orgUnit,
+    );
     return (
-        <Flex vertical gap="16px">
-            <OrgUnitTreeSelect onChange={(value) => {}} value={orgUnits} />
-            <Table
-                dataSource={trackedEntities}
-                columns={getAttributes(program.programTrackedEntityAttributes)}
-                rowKey="trackedEntity"
-                onRow={(record) => {
-                    return {
-                        onClick: () => {
-                            trackerActor.send({
-                                type: "SET_TRACKED_ENTITY_ID",
-                                trackedEntityId: record.trackedEntity,
-                            });
-                        },
-                        style: { cursor: "pointer" },
-                    };
+        <Flex vertical gap="16px" style={{ height: "100%" }}>
+            <OrgUnitTreeSelect
+                onChange={(value) => {
+                    if (value) {
+                        trackerActor.send({
+                            type: "SET_ORG_UNIT",
+                            orgUnit: value,
+                        });
+                    }
                 }}
+                value={orgUnit}
             />
+            <PatientListScreen />
         </Flex>
     );
 }
