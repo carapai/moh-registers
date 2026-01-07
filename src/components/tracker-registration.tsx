@@ -1,194 +1,324 @@
-import { MedicineBoxOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Flex, Form, Modal, Row, Space } from "antd";
-import { set } from "lodash";
-import React, { useEffect, useState } from "react";
+import { UserAddOutlined } from "@ant-design/icons";
+import { Button, Card, Flex, Form, message, Modal, Row, Typography } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import { TrackerContext } from "../machines/tracker";
-import { RootRoute } from "../routes/__root";
-import { ProgramRuleResult } from "../schemas";
-import { executeProgramRules } from "../utils/utils";
 import { DataElementField } from "./data-element-field";
+import { RootRoute } from "../routes/__root";
+import { flattenTrackedEntity } from "../utils/utils";
+
+const { Text } = Typography;
 
 export const TrackerRegistration: React.FC = () => {
+    const {
+        program,
+        trackedEntityAttributes,
+        optionSets,
+        programRuleVariables,
+        programRules,
+    } = RootRoute.useLoaderData();
+    const allAttributes: Map<string, boolean> = new Map(
+        program.programTrackedEntityAttributes.map(
+            ({ mandatory, trackedEntityAttribute: { id } }) => [id, mandatory],
+        ),
+    );
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
-
+    const [modalKey, setModalKey] = useState(0);
     const [form] = Form.useForm();
-    const { programRuleVariables, programRules } = RootRoute.useLoaderData();
     const trackedEntity = TrackerContext.useSelector(
         (state) => state.context.trackedEntity,
     );
-
-    const programTrackedEntityAttributes = TrackerContext.useSelector(
-        (state) => state.context.programTrackedEntityAttributes,
+    const ruleResult = TrackerContext.useSelector(
+        (state) => state.context.registrationRuleResults,
     );
 
-    const [ruleResult, setRuleResult] = useState<ProgramRuleResult>({
-        hiddenFields: new Set<string>(),
-        assignments: {},
-        messages: [],
-        warnings: [],
-        errors: [],
-        shownFields: new Set<string>(),
-        hiddenSections: new Set<string>(),
-        shownSections: new Set<string>(),
-        hiddenOptionGroups: {},
-        shownOptionGroups: {},
-        hiddenOptions: {},
-        shownOptions: {},
-    });
+    const trackerActor = TrackerContext.useActorRef();
+    const machineState = TrackerContext.useSelector((state) => state.value);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const evaluateRules = (attributeValues: any) => {
-        const result = executeProgramRules({
-            programRules: programRules.programRules,
-            programRuleVariables: programRuleVariables.programRuleVariables,
-            attributeValues,
-        });
-
-        console.log("Rule evaluation result:", result);
-
-        setRuleResult(result);
-
-        for (const [key, value] of Object.entries(result.assignments)) {
-            form.setFieldValue(key, value);
-        }
-    };
+    const fields = useMemo(() => {
+        return Object.entries(trackedEntity.attributes || {}).map(
+            ([name, value]) => ({
+                name,
+                value,
+            }),
+        );
+    }, []);
 
     const handleValuesChange = (_changed: any, allValues: any) => {
-        evaluateRules(allValues);
+        trackerActor.send({
+            type: "EXECUTE_PROGRAM_RULES",
+            attributeValues: allValues,
+            programRules: programRules,
+            programRuleVariables: programRuleVariables,
+        });
+        trackerActor.send({
+            type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+        });
     };
 
     useEffect(() => {
-        if (
-            trackedEntity &&
-            trackedEntity.attributes &&
-            Object.keys(trackedEntity.attributes).length > 0
-        ) {
-            const formValues = {
-                ...Object.entries(trackedEntity.attributes).reduce(
-                    (acc, [key, value]) => {
-                        set(acc, key, value);
-                        return acc;
-                    },
-                    {},
-                ),
-            };
-            setTimeout(() => {
-                form.setFieldsValue(formValues);
-                evaluateRules(formValues);
-            }, 0);
-        } else {
-            evaluateRules(trackedEntity?.attributes || {});
+        if (isVisitModalOpen) {
+            trackerActor.send({
+                type: "EXECUTE_PROGRAM_RULES",
+                attributeValues: trackedEntity.attributes,
+                programRules: programRules,
+                programRuleVariables: programRuleVariables,
+            });
+            trackerActor.send({
+                type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+            });
         }
-    }, []);
+    }, [isVisitModalOpen]);
+
+    // Listen for state machine transitions and show appropriate messages
+    // Only show success message if we were actually submitting
+    useEffect(() => {
+        if (machineState === "entitySuccess" && isSubmitting) {
+            message.success({
+                content: "Patient registered successfully!",
+                duration: 3,
+            });
+            setIsSubmitting(false);
+        } else if (machineState === "failure" && isSubmitting) {
+            message.error({
+                content: "Failed to save patient. Please try again.",
+                duration: 5,
+            });
+            setIsSubmitting(false);
+        }
+    }, [machineState, isSubmitting]);
+
+    const onStageSubmit = (values: any) => {
+        if (ruleResult.errors.length > 0) {
+            console.error(
+                "Form has validation errors from program rules:",
+                ruleResult.errors,
+            );
+            message.error({
+                content: `Validation failed: ${ruleResult.errors.map((e) => e.content).join(", ")}`,
+                duration: 5,
+            });
+            return;
+        }
+        try {
+            const current: ReturnType<typeof flattenTrackedEntity> = {
+                ...trackedEntity,
+                attributes: { ...trackedEntity.attributes, ...values },
+            };
+            setIsSubmitting(true);
+            trackerActor.send({
+                type: "CREATE_TRACKED_ENTITY",
+                trackedEntity: current,
+            });
+            // Success message will be shown after state machine confirms save
+            setIsVisitModalOpen(false);
+            // ✅ Machine will automatically navigate to patient detail page
+        } catch (error) {
+            console.error("Error creating patient:", error);
+            message.error({
+                content: "Failed to register patient. Please try again.",
+                duration: 5,
+            });
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleSubmit = async () => {
+        try {
+            await form.validateFields();
+            form.submit();
+        } catch (error) {
+            console.error("Form validation failed:", error);
+        }
+    };
+
+    const addPatient = () => {
+        // trackerActor.send({
+        //     type: "RESET_TRACKED_ENTITY",
+        // });
+        console.log(
+            "Resetting form for new patient registration",
+            trackedEntity,
+        );
+        form.resetFields();
+        setModalKey((prev) => prev + 1);
+        setIsVisitModalOpen(() => true);
+    };
     return (
         <>
             <Button
                 type="primary"
-                icon={<PlusOutlined />}
+                icon={<UserAddOutlined />}
                 style={{
-                    backgroundColor: "#7c3aed",
-                    borderColor: "#7c3aed",
+                    background:
+                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                    // borderColor: "#7c3aed",
+                    // borderRadius: 8,
+                    fontWeight: 500,
+                    // boxShadow: "0 2px 4px rgba(124, 58, 237, 0.2)",
                 }}
-                onClick={() => setIsVisitModalOpen(() => true)}
+                onClick={addPatient}
             >
-                Add Patient
+                Register New Patient
             </Button>
             <Modal
+                key={modalKey}
                 open={isVisitModalOpen}
-                // onCancel={() => setIsVisitModalOpen(false)}
+                onCancel={() => {
+                    form.resetFields();
+                    setIsVisitModalOpen(false);
+                }}
+                centered
                 title={
-                    <Space>
-                        <MedicineBoxOutlined />
-                        <span>Registration Details</span>
-                    </Space>
+                    <Flex align="center" gap="middle">
+                        <div
+                            style={{
+                                width: 40,
+                                height: 40,
+                                borderRadius: "50%",
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#fff",
+                            }}
+                        >
+                            <UserAddOutlined style={{ fontSize: 20 }} />
+                        </div>
+                        <Text strong style={{ fontSize: 18, color: "#1f2937" }}>
+                            Patient Registration
+                        </Text>
+                    </Flex>
                 }
-                width="80vw"
-                footer={[
-                    <Button
-                        key="cancel"
-                        onClick={() => setIsVisitModalOpen(false)}
+                width="85vw"
+                footer={
+                    <Flex
+                        justify="end"
+                        gap="middle"
+                        style={{ padding: "8px 0" }}
                     >
-                        Cancel
-                    </Button>,
-                    <Button
-                        key="submit"
-                        type="primary"
-                        onClick={() => form.submit()}
-                    >
-                        Add Record
-                    </Button>,
-                ]}
+                        <Button
+                            onClick={() => {
+                                form.resetFields();
+                                setIsVisitModalOpen(false);
+                            }}
+                            style={{ borderRadius: 8 }}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="primary"
+                            onClick={handleSubmit}
+                            style={{
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                borderColor: "#7c3aed",
+                                borderRadius: 8,
+                                fontWeight: 500,
+                                paddingLeft: 32,
+                                paddingRight: 32,
+                            }}
+                        >
+                            Register Patient
+                        </Button>
+                    </Flex>
+                }
                 styles={{
                     body: {
-                        maxHeight: "80vh",
+                        maxHeight: "75vh",
                         overflow: "auto",
+                    },
+                    wrapper: {},
+                    container: {
+                        backgroundColor: "#f5f5f5",
                     },
                 }}
             >
                 <Form
                     form={form}
                     layout="vertical"
-                    // onFinish={onStageSubmit}
+                    fields={fields}
+                    onFinish={onStageSubmit}
                     onValuesChange={handleValuesChange}
                     style={{ margin: 0, padding: 0 }}
+                    initialValues={trackedEntity.attributes}
                 >
-                    <Flex vertical style={{ padding: 12 }}>
-                        <Row gutter={24}>
-                            {programTrackedEntityAttributes.flatMap(
-                                ({ trackedEntityAttribute, mandatory }) => {
-                                    if (
-                                        ruleResult.hiddenSections.has(
-                                            trackedEntityAttribute.id,
-                                        )
-                                    )
-                                        return [];
-                                    const finalOptions =
-                                        trackedEntityAttribute.optionSet?.options.flatMap(
-                                            (o) => {
-                                                if (
-                                                    ruleResult.hiddenOptions[
-                                                        trackedEntityAttribute
-                                                            .id
-                                                    ]?.has(o.id)
-                                                ) {
-                                                    return [];
-                                                }
-                                                return o;
-                                            },
-                                        );
+                    <Flex vertical gap={10}>
+                        {program.programSections.map(
+                            ({ name, trackedEntityAttributes: tei, id }) => (
+                                <Card
+                                    title={name}
+                                    key={id}
+                                    style={{ borderRadius: 0 }}
+                                    size="small"
+                                >
+                                    <Row gutter={[16, 0]}>
+                                        {tei.map(({ id }) => {
+                                            const current =
+                                                trackedEntityAttributes.get(
+                                                    id,
+                                                )!;
+                                            if (
+                                                ruleResult.hiddenSections.has(
+                                                    id,
+                                                )
+                                            )
+                                                return [];
 
-                                    const errors = ruleResult.errors.filter(
-                                        (msg) =>
-                                            msg.key ===
-                                            trackedEntityAttribute.id,
-                                    );
-                                    const messages = ruleResult.messages.filter(
-                                        (msg) =>
-                                            msg.key ===
-                                            trackedEntityAttribute.id,
-                                    );
-                                    const warnings = ruleResult.warnings.filter(
-                                        (msg) =>
-                                            msg.key ===
-                                            trackedEntityAttribute.id,
-                                    );
+                                            const optionSet =
+                                                current.optionSet?.id ?? "";
 
-                                    return (
-                                        <DataElementField
-                                            key={trackedEntityAttribute.id}
-                                            dataElement={trackedEntityAttribute}
-                                            hidden={false}
-                                            renderOptionsAsRadio={false}
-                                            vertical={false}
-                                            finalOptions={finalOptions}
-                                            messages={messages}
-                                            warnings={warnings}
-                                            errors={errors}
-                                            required={mandatory}
-                                        />
-                                    );
-                                },
-                            )}
-                        </Row>
+                                            const finalOptions = optionSets
+                                                .get(optionSet)
+                                                ?.flatMap((o) => {
+                                                    if (
+                                                        ruleResult.hiddenOptions[
+                                                            o.id
+                                                        ]?.has(o.id)
+                                                    ) {
+                                                        return [];
+                                                    }
+                                                    return o;
+                                                });
+
+                                            const errors =
+                                                ruleResult.errors.filter(
+                                                    (msg) => msg.key === id,
+                                                );
+                                            const messages =
+                                                ruleResult.messages.filter(
+                                                    (msg) => msg.key === id,
+                                                );
+                                            const warnings =
+                                                ruleResult.warnings.filter(
+                                                    (msg) => msg.key === id,
+                                                );
+
+                                            return (
+                                                <DataElementField
+                                                    key={id}
+                                                    dataElement={current}
+                                                    hidden={false}
+                                                    renderOptionsAsRadio={false}
+                                                    vertical={false}
+                                                    finalOptions={finalOptions}
+                                                    messages={messages}
+                                                    warnings={warnings}
+                                                    errors={errors}
+                                                    required={
+                                                        allAttributes.get(id) ||
+                                                        false
+                                                    }
+                                                    span={6}
+                                                    form={form}
+                                                />
+                                            );
+                                        })}
+                                    </Row>
+                                </Card>
+                            ),
+                        )}
                     </Flex>
                 </Form>
             </Modal>

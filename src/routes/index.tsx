@@ -4,9 +4,13 @@ import { RootRoute } from "./__root";
 export const IndexRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/",
-    beforeLoad: () => {
-        throw redirect({
-            to: "/tracked-entities",
-        });
+    // beforeLoad: () => {
+    //     throw redirect({
+    //         to: "/tracked-entities",
+    //     });
+    // },
+
+    component: () => {
+        return <div>Welcome to MOH Registers</div>;
     },
 });

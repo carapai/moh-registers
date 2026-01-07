@@ -1,35 +1,62 @@
-import { CalendarOutlined, EyeOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+    ExperimentOutlined,
+    EyeOutlined,
+    PlusOutlined,
+} from "@ant-design/icons";
 import {
     Button,
     Card,
     Flex,
     Form,
+    message,
     Modal,
     Row,
-    Space,
     Table,
     TableProps,
+    Typography,
 } from "antd";
 import dayjs from "dayjs";
-import { set } from "lodash";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { singular } from "pluralize";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
-import { ProgramRuleResult, ProgramStage } from "../schemas";
-import {
-    createEmptyEvent,
-    executeProgramRules,
-    flattenTrackedEntity,
-} from "../utils/utils";
+import { ProgramStage } from "../schemas";
+import { createEmptyEvent, flattenTrackedEntity } from "../utils/utils";
 import { DataElementField } from "./data-element-field";
+
+const { Text } = Typography;
 
 export const ProgramStageCapture: React.FC<{
     programStage: ProgramStage;
 }> = ({ programStage }) => {
     const [stageForm] = Form.useForm();
-    const { allDataElements, programRuleVariables, programRules } =
-        RootRoute.useLoaderData();
+    const {
+        dataElements,
+        optionGroups,
+        program,
+        optionSets,
+        programRuleVariables,
+        programRules,
+    } = RootRoute.useLoaderData();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
+    const [modalKey, setModalKey] = useState(0);
+    const programStageDataElements = new Map(
+        program.programStages
+            .find((ps) => ps.id === programStage.id)
+            ?.programStageDataElements.map((psde) => [
+                psde.dataElement.id,
+                {
+                    allowFutureDate: psde.allowFutureDate,
+                    renderOptionsAsRadio: psde.renderType !== undefined,
+                    compulsory: psde.compulsory,
+                    vertical: psde.renderType
+                        ? psde.renderType.DESKTOP?.type !==
+                          "HORIZONTAL_RADIOBUTTONS"
+                        : false,
+                    ...dataElements.get(psde.dataElement.id),
+                },
+            ]) ?? [],
+    );
     const enrollment = TrackerContext.useSelector(
         (state) => state.context.trackedEntity.enrollment,
     );
@@ -42,6 +69,21 @@ export const ProgramStageCapture: React.FC<{
         (state) => state.context.mainEvent,
     );
 
+    const ruleResult = TrackerContext.useSelector(
+        (state) => state.context.currentEventRuleResults,
+    );
+    // Convert currentEvent dataValues to Ant Design fields format for controlled form
+    // const fields = useMemo(
+    //     () =>
+    //         Object.entries(currentEvent.dataValues || {}).map(
+    //             ([name, value]) => ({
+    //                 name,
+    //                 value,
+    //             }),
+    //         ),
+    //     [currentEvent.event, currentEvent.dataValues], // Include dataValues to properly recalculate when data changes
+    // );
+
     const events = TrackerContext.useSelector((state) =>
         state.context.trackedEntity?.events.filter(
             (e) =>
@@ -53,7 +95,27 @@ export const ProgramStageCapture: React.FC<{
     const showVisitModal = (
         visit: ReturnType<typeof flattenTrackedEntity>["events"][number],
     ) => {
-        trackerActor.send({ type: "SET_CURRENT_EVENT", currentEvent: visit });
+        // trackerActor.send({ type: "SET_CURRENT_EVENT", currentEvent: visit });
+        setModalKey((prev) => prev + 1);
+        setIsVisitModalOpen(true);
+    };
+
+    const showCreateVisitModal = () => {
+        stageForm.resetFields();
+        const emptyEvent = createEmptyEvent({
+            program: enrollment.program,
+            trackedEntity: enrollment.trackedEntity,
+            enrollment: enrollment.enrollment,
+            orgUnit: enrollment.orgUnit,
+            programStage: programStage.id,
+						
+        });
+
+        trackerActor.send({
+            type: "SET_CURRENT_EVENT",
+            currentEvent: emptyEvent,
+        });
+        setModalKey((prev) => prev + 1);
         setIsVisitModalOpen(true);
     };
 
@@ -66,6 +128,13 @@ export const ProgramStageCapture: React.FC<{
             key: "date",
             render: (date) => dayjs(date).format("MMM DD, YYYY"),
         },
+        ...programStage.programStageSections.flatMap((section) =>
+            section.dataElements.map((de) => ({
+                title: de.formName || de.name,
+                key: de.id,
+                dataIndex: ["dataValues", de.id],
+            })),
+        ),
         {
             title: "Action",
             key: "action",
@@ -82,110 +151,124 @@ export const ProgramStageCapture: React.FC<{
         },
     ];
 
+    const handleValuesChange = useCallback((_changed: any, allValues: any) => {
+        trackerActor.send({
+            type: "EXECUTE_PROGRAM_RULES",
+            dataValues: allValues,
+            programStage: programStage.id,
+            programRules,
+            programRuleVariables,
+        });
+        trackerActor.send({
+            type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+        });
+    }, []);
+
+    // Initialize form with event data values when modal opens
+    useEffect(() => {
+        if (isVisitModalOpen) {
+            stageForm.resetFields();
+            if (
+                currentEvent.dataValues &&
+                Object.keys(currentEvent.dataValues).length > 0
+            ) {
+                trackerActor.send({
+                    type: "EXECUTE_PROGRAM_RULES",
+                    dataValues: currentEvent.dataValues,
+                    programStage: programStage.id,
+                    programRules,
+                    programRuleVariables,
+                });
+
+                trackerActor.send({
+                    type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+                });
+            } else {
+                console.log("✨ Creating new stage event with empty form");
+            }
+        }
+    }, [isVisitModalOpen, currentEvent.event, trackerActor, stageForm]);
+
     const onStageSubmit = (values: Record<string, any>) => {
-        const event: ReturnType<typeof flattenTrackedEntity>["events"][number] =
-            {
+        if (ruleResult.errors.length > 0) {
+            console.error(
+                "Form has validation errors from program rules:",
+                ruleResult.errors,
+            );
+            message.error({
+                content: `Validation failed: ${ruleResult.errors.map((e) => e.content).join(", ")}`,
+                duration: 5,
+            });
+            return;
+        }
+        try {
+            const finalValues = {
+                ...values,
+                ...ruleResult.assignments,
+            };
+            const event: ReturnType<
+                typeof flattenTrackedEntity
+            >["events"][number] = {
                 ...currentEvent,
                 occurredAt: mainEvent.occurredAt,
-                dataValues: { ...currentEvent.dataValues, ...values },
+                dataValues: { ...currentEvent.dataValues, ...finalValues },
             };
-        trackerActor.send({
-            type: "CREATE_OR_UPDATE_EVENT",
-            event,
-        });
-        setIsVisitModalOpen(() => false);
-    };
-
-    const [ruleResult, setRuleResult] = useState<ProgramRuleResult>({
-        hiddenFields: new Set<string>(),
-        assignments: {},
-        messages: [],
-        warnings: [],
-        errors: [],
-        shownFields: new Set<string>(),
-        hiddenSections: new Set<string>(),
-        shownSections: new Set<string>(),
-        hiddenOptionGroups: {},
-        shownOptionGroups: {},
-        hiddenOptions: {},
-        shownOptions: {},
-    });
-
-    const evaluateRules = (dataValues: any) => {
-        const result = executeProgramRules({
-            programRules: programRules.programRules,
-            programRuleVariables: programRuleVariables.programRuleVariables,
-            dataValues,
-        });
-
-        setRuleResult(result);
-
-        for (const [key, value] of Object.entries(result.assignments)) {
-            stageForm.setFieldValue(key, value);
+            trackerActor.send({
+                type: "CREATE_OR_UPDATE_EVENT",
+                event,
+            });
+            stageForm.resetFields();
+            trackerActor.send({ type: "RESET_CURRENT_EVENT" });
+            setIsVisitModalOpen(false);
+        } catch (error) {
+            console.error("Error saving record:", error);
+            message.error({
+                content: "Failed to save record. Please try again.",
+                duration: 5,
+            });
         }
     };
 
-    const handleValuesChange = (_changed: any, allValues: any) => {
-        evaluateRules(allValues);
-    };
-
-    useEffect(() => {
-        stageForm.resetFields();
-        if (
-            currentEvent &&
-            currentEvent.dataValues &&
-            Object.keys(currentEvent.dataValues).length > 0
-        ) {
-            const formValues = {
-                occurredAt: currentEvent.occurredAt,
-                ...Object.entries(currentEvent.dataValues).reduce(
-                    (acc, [key, value]) => {
-                        set(acc, key, value);
-                        return acc;
-                    },
-                    {},
-                ),
-            };
-            setTimeout(() => {
-                stageForm.setFieldsValue(formValues);
-                evaluateRules(formValues);
-            }, 0);
-        } else {
-            evaluateRules(currentEvent?.dataValues || {});
+    const handleSubmit = async () => {
+        try {
+            await stageForm.validateFields();
+            stageForm.submit();
+        } catch (error) {
+            console.error("Form validation failed:", error);
         }
-    }, [open, currentEvent]);
+    };
 
     return (
         <Flex style={{ width: "100%" }}>
             <Card
                 title={
-                    <Space>
-                        <CalendarOutlined />
-                        <span>{programStage.name}</span>
-                    </Space>
+                    <Flex align="center" gap="small">
+                        <ExperimentOutlined
+                            style={{ fontSize: 15, color: "#7c3aed" }}
+                        />
+                        <Text strong style={{ fontSize: 14 }}>
+                            {programStage.name}
+                        </Text>
+                    </Flex>
                 }
                 extra={
                     <Button
                         type="primary"
                         icon={<PlusOutlined />}
-                        onClick={() => {
-                            showVisitModal(
-                                createEmptyEvent({
-                                    program: enrollment.program,
-                                    trackedEntity: enrollment.trackedEntity,
-                                    enrollment: enrollment.enrollment,
-                                    orgUnit: enrollment.orgUnit,
-                                    programStage: programStage.id,
-                                }),
-                            );
+                        onClick={showCreateVisitModal}
+                        size="middle"
+                        style={{
+                            background: "#7c3aed",
+                            borderColor: "#7c3aed",
+                            borderRadius: 6,
                         }}
                     >
-                        Add Record
+                        Add {programStage.name}
                     </Button>
                 }
                 styles={{
                     body: {
-                        padding: 0,
+                        padding: 10,
                         margin: 0,
                     },
                 }}
@@ -199,30 +282,80 @@ export const ProgramStageCapture: React.FC<{
                 />
             </Card>
             <Modal
+                key={modalKey}
                 open={isVisitModalOpen}
-                // onCancel={() => setIsVisitModalOpen(false)}
-                width="60vw"
-                footer={[
-                    <Button
-                        key="cancel"
-                        onClick={() => setIsVisitModalOpen(false)}
+                onCancel={() => {
+                    stageForm.resetFields();
+                    // trackerActor.send({ type: "RESET_CURRENT_EVENT" });
+                    setIsVisitModalOpen(false);
+                }}
+                title={
+                    <Flex align="center" gap="middle">
+                        <div
+                            style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: "50%",
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#fff",
+                            }}
+                        >
+                            <ExperimentOutlined style={{ fontSize: 16 }} />
+                        </div>
+                        <Text strong style={{ fontSize: 16 }}>
+                            {singular(programStage.name)}
+                        </Text>
+                    </Flex>
+                }
+                width="70vw"
+                footer={
+                    <Flex
+                        justify="end"
+                        gap="middle"
+                        style={{ padding: "8px 0" }}
                     >
-                        Cancel
-                    </Button>,
-                    <Button
-                        key="submit"
-                        type="primary"
-                        onClick={() => stageForm.submit()}
-                    >
-                        Add Record
-                    </Button>,
-                ]}
+                        <Button
+                            onClick={() => {
+                                stageForm.resetFields();
+                                trackerActor.send({
+                                    type: "RESET_CURRENT_EVENT",
+                                });
+                                setIsVisitModalOpen(false);
+                            }}
+                            style={{ borderRadius: 8 }}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="primary"
+                            onClick={handleSubmit}
+                            style={{
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                borderColor: "#7c3aed",
+                                borderRadius: 8,
+                                fontWeight: 500,
+                                paddingLeft: 28,
+                                paddingRight: 28,
+                            }}
+                        >
+                            Save {singular(programStage.name)}
+                        </Button>
+                    </Flex>
+                }
                 styles={{
                     body: {
                         maxHeight: "70vh",
                         overflow: "auto",
+                        background: "#fafafa",
+                        padding: "24px 28px",
                     },
                 }}
+                centered
             >
                 <Form
                     form={stageForm}
@@ -231,16 +364,28 @@ export const ProgramStageCapture: React.FC<{
                     onValuesChange={handleValuesChange}
                     style={{ margin: 0, padding: 0 }}
                 >
-                    <Flex vertical style={{ padding: 24 }}>
+                    <Flex vertical>
                         {programStage.programStageSections.flatMap(
                             (section) => {
                                 if (ruleResult.hiddenSections.has(section.id))
                                     return [];
 
                                 return (
-                                    <Row gutter={24}>
+                                    <Row gutter={[24, 16]} key={section.id}>
                                         {section.dataElements.flatMap(
                                             (dataElement) => {
+                                                const {
+                                                    compulsory = false,
+                                                    vertical = false,
+                                                    renderOptionsAsRadio = false,
+                                                } = programStageDataElements.get(
+                                                    dataElement.id,
+                                                ) ?? {};
+
+                                                const currentDataElement =
+                                                    dataElements.get(
+                                                        dataElement.id,
+                                                    );
                                                 if (
                                                     ruleResult.hiddenFields.has(
                                                         dataElement.id,
@@ -249,20 +394,57 @@ export const ProgramStageCapture: React.FC<{
                                                     return [];
                                                 }
 
-                                                const finalOptions =
-                                                    dataElement.optionSet?.options.flatMap(
-                                                        (o) => {
-                                                            if (
-                                                                ruleResult.hiddenOptions[
-                                                                    dataElement
-                                                                        .id
-                                                                ]?.has(o.id)
-                                                            ) {
-                                                                return [];
-                                                            }
-                                                            return o;
-                                                        },
-                                                    );
+                                                const optionSet =
+                                                    currentDataElement
+                                                        ?.optionSet?.id ?? "";
+
+                                                const hiddenOptions =
+                                                    ruleResult.hiddenOptions[
+                                                        dataElement.id
+                                                    ];
+
+                                                const shownOptionGroups =
+                                                    ruleResult
+                                                        .shownOptionGroups[
+                                                        dataElement.id
+                                                    ] || new Set<string>();
+
+                                                let finalOptions = optionSets
+                                                    .get(optionSet)
+                                                    ?.flatMap((o) => {
+                                                        if (
+                                                            hiddenOptions?.has(
+                                                                o.id,
+                                                            )
+                                                        ) {
+                                                            return [];
+                                                        }
+                                                        return o;
+                                                    });
+
+                                                if (
+                                                    shownOptionGroups.size > 0
+                                                ) {
+                                                    const currentOptions =
+                                                        optionGroups.get(
+                                                            shownOptionGroups
+                                                                .values()
+                                                                .next().value,
+                                                        ) ?? [];
+                                                    finalOptions =
+                                                        currentOptions.map(
+                                                            ({
+                                                                code,
+                                                                id,
+                                                                name,
+                                                            }) => ({
+                                                                id,
+                                                                code,
+                                                                name,
+                                                                optionSet,
+                                                            }),
+                                                        );
+                                                }
 
                                                 const errors =
                                                     ruleResult.errors.filter(
@@ -283,37 +465,25 @@ export const ProgramStageCapture: React.FC<{
                                                             dataElement.id,
                                                     );
 
-                                                const required =
-                                                    allDataElements.get(
-                                                        dataElement.id,
-                                                    )?.compulsory ?? false;
-
                                                 return (
                                                     <DataElementField
                                                         dataElement={
-                                                            dataElement
+                                                            currentDataElement!
                                                         }
                                                         hidden={false}
                                                         renderOptionsAsRadio={
-                                                            allDataElements.get(
-                                                                dataElement.id,
-                                                            )
-                                                                ?.renderOptionsAsRadio ??
-                                                            false
+                                                            renderOptionsAsRadio
                                                         }
-                                                        vertical={
-                                                            allDataElements.get(
-                                                                dataElement.id,
-                                                            )?.vertical ?? false
-                                                        }
+                                                        vertical={vertical}
                                                         finalOptions={
                                                             finalOptions
                                                         }
                                                         messages={messages}
                                                         warnings={warnings}
                                                         errors={errors}
-                                                        required={required}
-                                                        key={dataElement.id}
+                                                        required={compulsory}
+                                                        key={`${section.id}${dataElement.id}`}
+                                                        form={stageForm}
                                                     />
                                                 );
                                             },

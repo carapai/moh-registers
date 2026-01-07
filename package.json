@@ -7,7 +7,7 @@
     "packageManager": "yarn@1.22.22",
     "scripts": {
         "build": "d2-app-scripts build",
-        "start": "d2-app-scripts start --proxy https://customization.health.go.ug/eregistry",
+        "start": "d2-app-scripts start --proxy https://eregistry.hispuganda.org",
         "test": "d2-app-scripts test",
         "deploy": "d2-app-scripts deploy"
     },
@@ -18,7 +18,10 @@
         "@tanstack/router-cli": "^1.139.3",
         "@xstate/react": "^6.0.0",
         "antd": "^6.0.0",
+        "dexie": "^4.2.1",
+        "dexie-react-hooks": "^4.2.0",
         "lodash": "^4.17.21",
+        "pluralize": "^8.0.0",
         "react": "^18",
         "react-dom": "^18",
         "xstate": "^5.24.0",

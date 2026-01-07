@@ -1,6 +1,10 @@
 import { FormItemProps, TableProps } from "antd";
 import dayjs from "dayjs";
+import { isEmpty } from "lodash";
 import {
+    FAttribute,
+    FDataElement,
+    Program,
     ProgramRule,
     ProgramRuleResult,
     ProgramRuleVariable,
@@ -9,23 +13,11 @@ import {
     TrackedEntityResponse,
 } from "../schemas";
 import { generateUid } from "./id";
-import { isEmpty } from "lodash";
-import { is } from "zod/locales";
 
 export const flattenTrackedEntityResponse = (te: TrackedEntityResponse) => {
-    return te.trackedEntities.flatMap(
-        ({ attributes, enrollments, ...rest }) => {
-            const [{ occurredAt, enrolledAt }] = enrollments;
-            return {
-                ...rest,
-                attributes: attributes.reduce((acc, attr) => {
-                    acc[attr.attribute] = attr.value;
-                    return acc;
-                }, {}),
-                enrollment: { occurredAt, enrolledAt },
-            };
-        },
-    );
+    return te.trackedEntities.map((trackedEntity) => {
+        return flattenTrackedEntity(trackedEntity);
+    });
 };
 
 export const flattenTrackedEntity = ({
@@ -34,20 +26,37 @@ export const flattenTrackedEntity = ({
     enrollments,
     ...rest
 }: TrackedEntity) => {
-    const trackedEntityAttributes = attributes.reduce((acc, attr) => {
+    // ✅ FIX: Add null safety for attributes
+    const trackedEntityAttributes = (attributes || []).reduce((acc, attr) => {
         acc[attr.attribute] = attr.value;
         return acc;
     }, {});
 
+    // ✅ FIX: Add null safety for enrollments
     const [{ events, attributes: eAttributes, ...enrollmentDetails }] =
         enrollments;
-    const enrollmentAttrs = eAttributes.reduce((acc, attr) => {
-        acc[attr.attribute] = attr.value;
-        return acc;
-    }, {});
 
-    const flattenedEvents = events.map((event) => {
-        const eventAttrs = event.dataValues.reduce((acc, dv) => {
+    // ✅ FIX: Add null safety for enrollment attributes
+    const enrollmentAttrs: Record<string, string> = (eAttributes || []).reduce(
+        (acc, attr) => {
+            acc[attr.attribute] = attr.value;
+            return acc;
+        },
+        {},
+    );
+
+    // console.log("🔄 flattenTrackedEntity:", {
+    //     trackedEntity,
+    //     attributes,
+    //     enrollments,
+    //     events,
+    // });
+
+    // ✅ FIX: Add null safety for events and dataValues
+    const flattenedEvents = (events || []).map((event) => {
+        const eventAttrs: Record<string, string> = (
+            event.dataValues || []
+        ).reduce((acc, dv) => {
             acc[dv.dataElement] = dv.value;
             return acc;
         }, {});
@@ -56,6 +65,7 @@ export const flattenTrackedEntity = ({
             dataValues: eventAttrs,
         };
     });
+
     return {
         ...rest,
         attributes: { ...trackedEntityAttributes, ...enrollmentAttrs },
@@ -89,17 +99,20 @@ export function executeProgramRules({
     programRuleVariables,
     dataValues,
     attributeValues = {},
+    program,
+    programStage,
 }: {
     programRules: ProgramRule[];
     programRuleVariables: ProgramRuleVariable[];
     dataValues?: Record<string, any>;
     attributeValues?: Record<string, any>;
+    programStage?: string;
+    program?: string;
 }): ProgramRuleResult {
+    console.log("🚀 Executing Program Rules:", attributeValues);
     const variableValues: Record<string, any> = {};
-    // Process program rule variables
     for (const variable of programRuleVariables) {
         let value: any = null;
-
         // Check for data element
         if (
             variable.dataElement &&
@@ -118,8 +131,7 @@ export function executeProgramRules({
         variableValues[variable.name] = value ?? null;
     }
 
-    console.log("Variable values for rule evaluation:", variableValues);
-
+    console.log("🔢 Program Rule Variable Values:", variableValues);
     // D2 function implementations
     const d2Functions = {
         hasValue: (varName: string): boolean => {
@@ -319,7 +331,6 @@ export function executeProgramRules({
     const evaluateCondition = (condition: string): boolean => {
         // First replace d2: function calls with JavaScript function calls
         let processedCondition = condition ?? "";
-
         // Replace d2:functionName(...) with d2Functions.functionName(...)
         processedCondition = processedCondition.replace(
             /d2:(\w+)\s*\(\s*([^)]+)\s*\)/g,
@@ -385,11 +396,6 @@ export function executeProgramRules({
             },
         );
 
-        console.log(
-            "Processed condition for rule evaluation:",
-            processedCondition,
-        );
-
         try {
             // Normalize comparison operators
             if (!isEmpty(processedCondition)) {
@@ -438,8 +444,21 @@ export function executeProgramRules({
     };
 
     for (const rule of programRules) {
+        if (rule.program && rule.program.id !== program) {
+            continue;
+        }
+
+        if (rule.programStage && rule.programStage.id !== programStage) {
+            continue;
+        }
         const isTrue = evaluateCondition(rule.condition);
-        if (!isTrue) continue;
+        console.log(
+            `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
+        );
+
+        if (!isTrue) {
+            continue;
+        }
 
         for (const action of rule.programRuleActions) {
             const targetId =
@@ -455,6 +474,7 @@ export function executeProgramRules({
 
                 case "HIDEFIELD":
                     if (targetId) {
+                        // console.log(`  🙈 HIDEFIELD: ${targetId}`);
                         result.hiddenFields.add(targetId);
                         result.assignments[targetId] = "";
                     }
@@ -462,6 +482,7 @@ export function executeProgramRules({
 
                 case "SHOWFIELD":
                     if (targetId) {
+                        // console.log(`  👁️  SHOWFIELD: ${targetId}`);
                         result.shownFields.add(targetId);
                     }
                     break;
@@ -542,6 +563,16 @@ export function executeProgramRules({
                         }
                     }
                     break;
+                case "SHOWERROR":
+                    if (targetId && action.content) {
+                        if (targetId && action.content) {
+                            result.errors.push({
+                                key: targetId,
+                                content: action.content ?? "",
+                            });
+                        }
+                    }
+                    break;
 
                 case "SHOWWARNING":
                     {
@@ -556,11 +587,22 @@ export function executeProgramRules({
             }
         }
     }
+
+    // 🐛 DEBUG: Log final rule execution result
+    // console.log(`📊 Program Rules Result:`, {
+    //     hiddenFields: Array.from(result.hiddenFields),
+    //     shownFields: Array.from(result.shownFields),
+    //     hiddenSections: Array.from(result.hiddenSections),
+    //     assignments: result.assignments,
+    //     errors: result.errors.length,
+    //     warnings: result.warnings.length,
+    // });
+
     return result;
 }
 
 export const isDate = (valueType: string | undefined) => {
-    return ["DATE", "DATETIME", "TIME", "AGE"].includes(valueType || "");
+    return ["DATE", "DATETIME", "TIME"].includes(valueType || "");
 };
 
 export const isNumber = (valueType: string | undefined) => {
@@ -643,6 +685,8 @@ export const createNormalize = (valueType: string | undefined) => {
     const normalize: FormItemProps["normalize"] = (value) => {
         if (isDate(valueType) && dayjs.isDayjs(value)) {
             return value.format("YYYY-MM-DD");
+        } else if (valueType === "AGE" && dayjs.isDayjs(value)) {
+            return value.format("YYYY-MM-DD");
         } else if (value && valueType === "MULTI_TEXT") {
             return Array.isArray(value) ? value.join(",") : value;
         }
@@ -652,23 +696,26 @@ export const createNormalize = (valueType: string | undefined) => {
 };
 export const createGetValueProps = (valueType: string | undefined) => {
     const getValueProps: FormItemProps["getValueProps"] = (value) => {
-        if (isDate(valueType) || valueType === "MULTI_TEXT") {
-            if (value && isDate(valueType)) {
+        if (isDate(valueType)) {
+            return {
+                value: value ? dayjs(value) : null,
+            };
+        }
+        if (valueType === "AGE") {
+            return {
+                value: value ? dayjs(value) : null,
+            };
+        }
+        if (valueType === "MULTI_TEXT") {
+            if (typeof value === "string") {
                 return {
-                    value: value ? dayjs(value) : null,
+                    value: value ? value.split(",").filter(Boolean) : [],
                 };
             }
-            if (value) {
-                if (typeof value === "string") {
-                    return {
-                        value: value ? value.split(",").filter(Boolean) : [],
-                    };
-                }
-                if (Array.isArray(value)) {
-                    return { value };
-                }
-                return { value: [] };
+            if (Array.isArray(value)) {
+                return { value };
             }
+            return { value: [] };
         }
         return { value };
     };

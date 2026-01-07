@@ -4,9 +4,10 @@ import {
     EyeOutlined,
     MedicineBoxOutlined,
     PlusOutlined,
+    UserAddOutlined,
 } from "@ant-design/icons";
 import { createRoute } from "@tanstack/react-router";
-import type { DescriptionsProps, TableProps } from "antd";
+import type { DescriptionsProps, SelectProps, TableProps } from "antd";
 import {
     Button,
     Card,
@@ -25,23 +26,26 @@ import {
     Tabs,
     Tag,
     Typography,
+    message,
 } from "antd";
 import dayjs from "dayjs";
-import { set } from "lodash";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { DataElementField } from "../components/data-element-field";
 import { ProgramStageCapture } from "../components/program-stage-capture";
-import { Spinner } from "../components/Spinner";
+import { FlattenedEvent } from "../db";
+import { useAutoSave } from "../hooks/useAutoSave";
+import { useTrackerState } from "../hooks/useTrackerState";
 import { TrackerContext } from "../machines/tracker";
-import { ProgramRuleResult } from "../schemas";
 import {
     createEmptyEvent,
+    createEmptyTrackedEntity,
     createGetValueProps,
     createNormalize,
-    executeProgramRules,
     flattenTrackedEntity,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
+import { OptionSet } from "../schemas";
+import { generateUid } from "../utils/id";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -53,140 +57,338 @@ const { Text } = Typography;
 function TrackedEntity() {
     const {
         program,
-        serviceTypes,
-        programRuleVariables,
+        dataElements,
+        optionGroups,
+        trackedEntityAttributes,
+        optionSets,
         programRules,
-        allDataElements,
+        programRuleVariables,
     } = RootRoute.useLoaderData();
     const trackerActor = TrackerContext.useActorRef();
-    const attributes = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity?.attributes,
-    );
-    const enrollment = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity.enrollment,
-    );
-    const events = TrackerContext.useSelector((state) =>
-        state.context.trackedEntity.events.filter(
-            (e) => e.programStage === "K2nxbE9ubSs",
-        ),
-    );
-    const mainEvent = TrackerContext.useSelector(
-        (state) => state.context.mainEvent,
-    );
-    const isLoading = TrackerContext.useSelector((state) =>
-        state.matches("loadingEntity"),
-    );
+    const serviceTypes: SelectProps<OptionSet["options"]>["options"] =
+        optionSets.get("QwsvSPpnRul") ?? [];
+    const { enrollment, events, mainEvent, ruleResult } =
+        useTrackerState("K2nxbE9ubSs");
+
+    const attributes = Array.from(trackedEntityAttributes.values());
 
     const keys: Map<string, string> = new Map(
-        program.programTrackedEntityAttributes.map((attr) => [
-            attr.trackedEntityAttribute.id,
-            attr.trackedEntityAttribute.displayFormName ||
-                attr.trackedEntityAttribute.name ||
-                "",
+        attributes?.map((attr) => [
+            attr.id,
+            attr.displayFormName || attr.name || "",
         ]),
     );
 
+    const machineState = TrackerContext.useSelector((state) => state.value);
+    const trackedEntity = TrackerContext.useSelector(
+        (state) => state.context.trackedEntity,
+    );
+
+    const dataElementToAttributeMap: Record<string, string> = {
+        // KJ2V2JlOxFi: "Y3DE5CZWySr",
+    };
+
+    // Configuration: Attributes to auto-populate from parent tracked entity
+    // These attributes will be copied from the current patient to the new patient
+    const parentAttributesToCopy: string[] = [
+        "XjgpfkoxffK",
+        "W87HAtUHJjB",
+        "PKuyTiVCR89",
+        "oTI0DLitzFY",
+    ];
+
+    // Configuration: Rename/relabel attributes in the nested modal
+    // Use this to change how attribute labels appear (e.g., "First Name" → "Mother's First Name")
+    const attributeLabelOverrides: Record<string, string> = {
+        // Format: 'attributeId': 'New Label'
+        // Example: Change "First Name" to "Mother's First Name"
+        // 'firstNameAttributeId': "Mother's First Name",
+        // 'lastNameAttributeId': "Mother's Last Name",
+        // 'dateOfBirthAttributeId': "Mother's Date of Birth",
+    };
+
+    // Configuration: Populate fields with combined values from multiple sources
+    // Just pre-fills the target field - does NOT hide or rename anything
+    const combinedAttributes: Record<
+        string,
+        {
+            sourceAttributes: string[];
+            separator?: string;
+        }
+    > = {
+        P6Kp91wfCWy: {
+            sourceAttributes: ["KSq9EyZ8ZFi", "TWPNbc9O2nK"],
+            separator: " ",
+        },
+        ACgDjRCyX8r: {
+            sourceAttributes: ["hPGgzWsb14m"],
+            separator: " ",
+        },
+    };
+
     const [visitForm] = Form.useForm();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
-
-    const [ruleResult, setRuleResult] = useState<ProgramRuleResult>({
-        hiddenFields: new Set<string>(),
-        assignments: {},
-        messages: [],
-        warnings: [],
-        errors: [],
-        shownFields: new Set<string>(),
-        hiddenSections: new Set<string>(),
-        shownSections: new Set<string>(),
-        hiddenOptionGroups: {},
-        shownOptionGroups: {},
-        hiddenOptions: {},
-        shownOptions: {},
+    const [modalKey, setModalKey] = useState(0);
+    const [isNestedModalOpen, setIsNestedModalOpen] = useState(false);
+    const [nestedModalKey, setNestedModalKey] = useState(0);
+    const [nestedForm] = Form.useForm();
+    const { clearDraft } = useAutoSave({
+        form: visitForm,
+        draftId: mainEvent.event,
+        type: "event",
+        interval: 30000,
+        enabled: isVisitModalOpen,
+        metadata: {
+            trackedEntity: enrollment.trackedEntity,
+            programStage: "K2nxbE9ubSs",
+            enrollment: enrollment.enrollment,
+            orgUnit: enrollment.orgUnit,
+            program: enrollment.program,
+            isNew: !mainEvent.event || mainEvent.event.startsWith("temp"),
+        },
+        onSave: () => console.log("💾 Visit draft auto-saved"),
     });
+    const onVisitSubmit = (values: Record<string, any>) => {
+        if (ruleResult.errors.length > 0) {
+            console.error(
+                "Form has validation errors from program rules:",
+                ruleResult.errors,
+            );
+            message.error({
+                content: `Validation failed: ${ruleResult.errors.map((e) => e.content).join(", ")}`,
+                duration: 5,
+            });
+            return;
+        }
+        try {
+            const { occurredAt, ...dataValues } = values;
 
-    const evaluateRules = (dataValues: any) => {
-        const result = executeProgramRules({
-            programRules: programRules.programRules,
-            programRuleVariables: programRuleVariables.programRuleVariables,
-            dataValues,
-            attributeValues: attributes,
-        });
-        setRuleResult(result);
-        for (const [key, value] of Object.entries(result.assignments)) {
-            visitForm.setFieldValue(key, value);
+            const finalValues = {
+                ...dataValues,
+                ...ruleResult.assignments,
+            };
+            const event: ReturnType<
+                typeof flattenTrackedEntity
+            >["events"][number] = {
+                ...mainEvent,
+                occurredAt,
+                dataValues: { ...mainEvent.dataValues, ...finalValues },
+            };
+            trackerActor.send({
+                type: "CREATE_OR_UPDATE_EVENT",
+                event,
+            });
+            trackerActor.send({ type: "SAVE_EVENTS" });
+
+            message.success({
+                content: "Visit record saved successfully!",
+                duration: 3,
+            });
+            // Clear draft after successful submission
+            clearDraft();
+            visitForm.resetFields();
+            trackerActor.send({ type: "RESET_MAIN_EVENT" });
+            setIsVisitModalOpen(false);
+        } catch (error) {
+            console.error("Error saving visit record:", error);
+            message.error({
+                content: "Failed to save visit record. Please try again.",
+                duration: 5,
+            });
         }
     };
 
-    const onVisitSubmit = (values: Record<string, any>) => {
-        const { occurredAt, ...dataValues } = values;
-        const event: ReturnType<typeof flattenTrackedEntity>["events"][number] =
-            {
-                ...mainEvent,
-                occurredAt,
-                dataValues: { ...mainEvent.dataValues, ...dataValues },
-            };
-        trackerActor.send({
-            type: "CREATE_OR_UPDATE_EVENT",
-            event,
-        });
-        trackerActor.send({ type: "SAVE_EVENTS" });
-        setIsVisitModalOpen(false);
-        visitForm.resetFields();
+    const showVisitModal = (visit: FlattenedEvent) => {
+        trackerActor.send({ type: "SET_MAIN_EVENT", mainEvent: visit });
+        setModalKey((prev) => prev + 1);
+        setIsVisitModalOpen(true);
     };
 
-    const showVisitModal = (
-        visit: ReturnType<typeof flattenTrackedEntity>["events"][number],
-    ) => {
-        trackerActor.send({ type: "SET_MAIN_EVENT", mainEvent: visit });
+    const showCreateVisitModal = () => {
+        // Reset form and machine state before creating new visit
+        visitForm.resetFields();
+        trackerActor.send({ type: "RESET_MAIN_EVENT" });
+
+        const emptyEvent = createEmptyEvent({
+            program: enrollment.program,
+            trackedEntity: enrollment.trackedEntity,
+            enrollment: enrollment.enrollment,
+            orgUnit: enrollment.orgUnit,
+            programStage: "K2nxbE9ubSs",
+        });
+
+        trackerActor.send({ type: "SET_MAIN_EVENT", mainEvent: emptyEvent });
+        setModalKey((prev) => prev + 1);
         setIsVisitModalOpen(true);
     };
 
     const handleModalClose = () => {
-        setIsVisitModalOpen(false);
         visitForm.resetFields();
+        trackerActor.send({ type: "RESET_MAIN_EVENT" });
+        setIsVisitModalOpen(false);
     };
 
-    const columns: TableProps<
-        ReturnType<typeof flattenTrackedEntity>["events"][number]
-    >["columns"] = [
-        {
-            title: "Date",
-            dataIndex: "occurredAt",
-            key: "date",
-            render: (date) => dayjs(date).format("MMM DD, YYYY"),
-        },
-        {
-            title: "Services",
-            dataIndex: ["dataValues", "mrKZWf2WMIC"],
-            key: "services",
-            render: (text) => (
-                <Flex gap="small" align="center" wrap>
-                    {text.split(",").map((tag) => {
-                        return (
-                            <Tag key={tag} color="blue">
-                                {tag.toUpperCase()}
-                            </Tag>
-                        );
-                    })}
-                </Flex>
-            ),
-        },
-        {
-            title: "Action",
-            key: "action",
-            width: 100,
-            render: (_, record) => (
-                <Button
-                    icon={<EyeOutlined />}
-                    onClick={() => {
-                        showVisitModal(record);
-                    }}
-                >
-                    View
-                </Button>
-            ),
-        },
-    ];
+    const handleSubmit = async () => {
+        try {
+            await visitForm.validateFields();
+            visitForm.submit();
+        } catch (error) {
+            console.error("Form validation failed:", error);
+        }
+    };
+
+    const openNestedModal = () => {
+        nestedForm.resetFields();
+
+        // Auto-populate attributes from parent tracked entity
+        const autoPopulatedAttributes: Record<string, any> = {};
+        parentAttributesToCopy.forEach((attributeId) => {
+            if (
+                trackedEntity.attributes &&
+                trackedEntity.attributes[attributeId]
+            ) {
+                autoPopulatedAttributes[attributeId] =
+                    trackedEntity.attributes[attributeId];
+            }
+        });
+
+        // Get current form values from visit form
+        const currentFormValues = visitForm.getFieldsValue();
+        console.log("Current form values for nested modal:", currentFormValues);
+
+        // Map data elements to attributes
+        const mappedAttributes: Record<string, any> = {};
+        Object.entries(dataElementToAttributeMap).forEach(
+            ([dataElementId, attributeId]) => {
+                if (currentFormValues[dataElementId]) {
+                    let value = currentFormValues[dataElementId];
+
+                    // Convert dayjs objects to string format for date fields
+                    if (
+                        value &&
+                        typeof value === "object" &&
+                        "format" in value
+                    ) {
+                        value = value.format("YYYY-MM-DD");
+                    }
+
+                    mappedAttributes[attributeId] = value;
+                }
+            },
+        );
+
+        // Handle combined attributes - populate target fields with combined values
+        const combinedValues: Record<string, any> = {};
+        Object.entries(combinedAttributes).forEach(([targetAttrId, config]) => {
+            const values = config.sourceAttributes
+                .map(
+                    (attrId) =>
+                        autoPopulatedAttributes[attrId] ||
+                        mappedAttributes[attrId] ||
+                        trackedEntity.attributes?.[attrId] ||
+                        "",
+                )
+                .filter((v) => v); // Remove empty values
+
+            if (values.length > 0) {
+                // Combine values with separator and populate target attribute
+                combinedValues[targetAttrId] = values.join(
+                    config.separator || " ",
+                );
+            }
+        });
+
+        // Combine auto-populated and mapped attributes
+        const initialValues = {
+            ...autoPopulatedAttributes,
+            ...mappedAttributes,
+            ...combinedValues,
+        };
+        nestedForm.setFieldsValue(initialValues);
+        setNestedModalKey((prev) => prev + 1);
+        setIsNestedModalOpen(true);
+    };
+
+    const closeNestedModal = () => {
+        nestedForm.resetFields();
+        setIsNestedModalOpen(false);
+    };
+
+    const handleNestedSubmit = async (values: any) => {
+        try {
+            const newTrackedEntity: ReturnType<typeof flattenTrackedEntity> = {
+                ...createEmptyTrackedEntity({
+                    orgUnit: enrollment.orgUnit,
+                }),
+                attributes: values,
+            };
+
+            trackerActor.send({
+                type: "CREATE_TRACKED_CHILD_ENTITY",
+                trackedEntity: newTrackedEntity,
+            });
+            closeNestedModal();
+        } catch (error) {
+            console.error("Error creating patient:", error);
+            message.error({
+                content: "Failed to register patient. Please try again.",
+                duration: 5,
+            });
+        }
+    };
+
+    const handleNestedFormSubmit = async () => {
+        try {
+            await nestedForm.validateFields();
+            nestedForm.submit();
+        } catch (error) {
+            console.error("Nested form validation failed:", error);
+        }
+    };
+
+    // ✅ OPTIMIZED: Memoized columns prevent Table re-renders
+    const columns: TableProps<FlattenedEvent>["columns"] = useMemo(
+        () => [
+            {
+                title: "Date",
+                dataIndex: "occurredAt",
+                key: "date",
+                render: (date) => dayjs(date).format("MMM DD, YYYY"),
+            },
+            // {
+            //     title: "Services",
+            //     dataIndex: ["dataValues", "mrKZWf2WMIC"],
+            //     key: "services",
+            //     render: (text) => (
+            //         <Flex gap="small" align="center" wrap>
+            //             {text.split(",").map((tag) => {
+            //                 return (
+            //                     <Tag key={tag} color="blue">
+            //                         {tag.toUpperCase()}
+            //                     </Tag>
+            //                 );
+            //             })}
+            //         </Flex>
+            //     ),
+            // },
+            {
+                title: "Action",
+                key: "action",
+                width: 100,
+                render: (_, record) => (
+                    <Button
+                        icon={<EyeOutlined />}
+                        onClick={() => {
+                            showVisitModal(record);
+                        }}
+                    >
+                        View
+                    </Button>
+                ),
+            },
+        ],
+        [], // Empty deps - columns don't depend on state
+    );
 
     const items: DescriptionsProps["items"] = Object.entries(
         attributes || {},
@@ -196,38 +398,65 @@ function TrackedEntity() {
     }));
 
     const handleValuesChange = (_changed: any, allValues: any) => {
-        evaluateRules(allValues);
+        // Check if REWqohCg4Km changed to "yes"
+        if (_changed && _changed["REWqohCg4Km"] === "Yes") {
+            openNestedModal();
+        }
+
+        trackerActor.send({
+            type: "EXECUTE_PROGRAM_RULES",
+            dataValues: allValues,
+            programRules,
+            programRuleVariables,
+            programStage: mainEvent.programStage,
+            // attributeValues: trackedEntity.attributes,
+        });
+        trackerActor.send({
+            type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+        });
     };
 
     useEffect(() => {
-        if (
-            mainEvent &&
-            mainEvent.dataValues &&
-            Object.keys(mainEvent.dataValues).length > 0
-        ) {
-            console.log("Setting form values for main event:", attributes);
-            const formValues = {
-                occurredAt: mainEvent.occurredAt,
-                ...Object.entries(mainEvent.dataValues).reduce(
-                    (acc, [key, value]) => {
-                        set(acc, key, value);
-                        return acc;
-                    },
-                    {},
-                ),
-            };
-            // setTimeout(() => {
-            //     visitForm.setFieldsValue(formValues);
-            // }, 0);
-            evaluateRules(formValues);
-        } else {
-            evaluateRules(mainEvent?.dataValues || {});
+        if (isVisitModalOpen) {
+            trackerActor.send({
+                type: "EXECUTE_PROGRAM_RULES",
+                programRules: programRules,
+                programRuleVariables: programRuleVariables,
+                programStage: mainEvent.programStage,
+                dataValues: mainEvent.dataValues,
+								// attributeValues: trackedEntity.attributes,
+            });
+            trackerActor.send({
+                type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+            });
         }
-    }, [open, mainEvent, attributes]);
+    }, [isVisitModalOpen]);
 
-    if (isLoading) {
-        return <Spinner />;
-    }
+    // Initialize form with event data values when modal opens
+    useEffect(() => {
+        if (isVisitModalOpen && mainEvent) {
+            visitForm.resetFields();
+            visitForm.setFieldsValue({
+                ...mainEvent.dataValues,
+                occurredAt: mainEvent.occurredAt,
+            });
+        }
+    }, [isVisitModalOpen, mainEvent.event, visitForm]);
+
+    // Listen for state machine transitions and show appropriate messages
+    useEffect(() => {
+        if (machineState === "entitySuccess") {
+            message.success({
+                content: "Patient registered successfully!",
+                duration: 3,
+            });
+        } else if (machineState === "failure") {
+            message.error({
+                content: "Failed to save patient. Please try again.",
+                duration: 5,
+            });
+        }
+    }, [machineState]);
 
     return (
         <>
@@ -236,9 +465,16 @@ function TrackedEntity() {
                     <Flex vertical gap="16px">
                         <Flex>
                             <Button
-                                onClick={() =>
-                                    trackerActor.send({ type: "GO_BACK" })
-                                }
+                                onClick={() => {
+                                    visitForm.resetFields();
+                                    trackerActor.send({
+                                        type: "RESET_MAIN_EVENT",
+                                    });
+                                    trackerActor.send({
+                                        type: "RESET_TRACKED_ENTITY",
+                                    });
+                                    trackerActor.send({ type: "GO_BACK" });
+                                }}
                             >
                                 Back
                             </Button>
@@ -248,25 +484,16 @@ function TrackedEntity() {
                                 <Space>
                                     <CalendarOutlined />
                                     <span>Patient Visits</span>
+                                    {!navigator.onLine && (
+                                        <Tag color="orange">Offline</Tag>
+                                    )}
                                 </Space>
                             }
                             extra={
                                 <Button
                                     type="primary"
                                     icon={<PlusOutlined />}
-                                    onClick={() => {
-                                        showVisitModal(
-                                            createEmptyEvent({
-                                                program: enrollment.program,
-                                                trackedEntity:
-                                                    enrollment.trackedEntity,
-                                                enrollment:
-                                                    enrollment.enrollment,
-                                                orgUnit: enrollment.orgUnit,
-                                                programStage: "K2nxbE9ubSs",
-                                            }),
-                                        );
-                                    }}
+                                    onClick={showCreateVisitModal}
                                 >
                                     Add Visit
                                 </Button>
@@ -278,6 +505,7 @@ function TrackedEntity() {
                                 dataSource={events}
                                 pagination={false}
                                 rowKey="event"
+                                scroll={{ x: "max-content" }}
                             />
                         </Card>
                     </Flex>
@@ -373,97 +601,213 @@ function TrackedEntity() {
                 </Splitter.Panel>
             </Splitter>
             <Modal
+                key={modalKey}
                 title={
-                    <Space>
-                        <MedicineBoxOutlined />
-                        <span>Visit Details</span>
-                    </Space>
+                    <Flex align="center" gap="middle">
+                        <div
+                            style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: "50%",
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#fff",
+                            }}
+                        >
+                            <MedicineBoxOutlined style={{ fontSize: 18 }} />
+                        </div>
+                        <Text strong style={{ fontSize: 18 }}>
+                            {mainEvent.event &&
+                            !mainEvent.event.startsWith("temp")
+                                ? "Edit Visit Record"
+                                : "New Visit Record"}
+                        </Text>
+                    </Flex>
                 }
                 open={isVisitModalOpen}
                 onCancel={handleModalClose}
-                footer={[
-                    <Button key="cancel" onClick={handleModalClose}>
-                        Cancel
-                    </Button>,
-                    <Button
-                        key="submit"
-                        type="primary"
-                        onClick={() => visitForm.submit()}
+                footer={
+                    <Flex
+                        justify="space-between"
+                        align="center"
+                        style={{ padding: "12px 0" }}
                     >
-                        {"Update/Create Visit"}
-                    </Button>,
-                ]}
-                width="90vw"
+                        <Flex align="center" gap="middle">
+                            <CalendarOutlined
+                                style={{ color: "#7c3aed", fontSize: 16 }}
+                            />
+                            <Text type="secondary" style={{ fontSize: 14 }}>
+                                Visit Date:{" "}
+                                <Text strong>
+                                    {mainEvent.occurredAt
+                                        ? dayjs(mainEvent.occurredAt).format(
+                                              "MMM DD, YYYY",
+                                          )
+                                        : "Not set"}
+                                </Text>
+                            </Text>
+                        </Flex>
+                        <Space size="middle">
+                            <Button
+                                onClick={handleModalClose}
+                                style={{ borderRadius: 8 }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={handleSubmit}
+                                style={{
+                                    background:
+                                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 8,
+                                    fontWeight: 500,
+                                    paddingLeft: 32,
+                                    paddingRight: 32,
+                                }}
+                            >
+                                Save Visit
+                            </Button>
+                        </Space>
+                    </Flex>
+                }
+                width="95vw"
                 styles={{
                     body: {
-                        height: "70vh",
+                        height: "75vh",
                         margin: 0,
                         padding: 0,
                     },
+                    container: {
+                        background: "#f5f5f5",
+                    },
                 }}
+                centered
             >
                 <Form
                     form={visitForm}
                     layout="vertical"
                     onFinish={onVisitSubmit}
                     onValuesChange={handleValuesChange}
+                    style={{ margin: 0, padding: 0 }}
                     initialValues={{
                         ...mainEvent.dataValues,
                         occurredAt: mainEvent.occurredAt,
                     }}
-                    style={{ margin: 0, padding: 0 }}
                 >
-                    <Flex vertical style={{ padding: 12 }}>
-                        <Row gutter={16}>
-                            <Col span={12}>
-                                <Form.Item
-                                    label="Visit Date"
-                                    name="occurredAt"
-                                    rules={[
-                                        {
-                                            required: true,
-                                            message:
-                                                "Please select visit date!",
-                                        },
-                                    ]}
-                                    getValueProps={createGetValueProps("DATE")}
-                                    normalize={createNormalize("DATE")}
-                                >
-                                    <DatePicker style={{ width: "100%" }} />
-                                </Form.Item>
-                            </Col>
-                            <Col span={12}>
-                                <Form.Item
-                                    label="Service Type"
-                                    name="mrKZWf2WMIC"
-                                    rules={[
-                                        {
-                                            required: true,
-                                            message:
-                                                "Please select service type!",
-                                        },
-                                    ]}
-                                    getValueProps={createGetValueProps(
-                                        "MULTI_TEXT",
-                                    )}
-                                    normalize={createNormalize("MULTI_TEXT")}
-                                >
-                                    <Select
-                                        style={{ width: "100%" }}
-                                        options={serviceTypes}
-                                        value
-                                        fieldNames={{
-                                            label: "name",
-                                            value: "code",
-                                        }}
-                                        mode="multiple"
-                                    />
-                                </Form.Item>
-                            </Col>
-                        </Row>
+                    <Flex vertical gap={10}>
+                        {/* Visit Basic Info Card */}
+                        <Card
+                            style={{
+                                // marginBottom: 20,
+                                borderRadius: 0,
+                                // boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+                            }}
+                            // styles={{ body: { padding: "20px 24px" } }}
+                        >
+                            <Row gutter={20}>
+                                <Col span={12}>
+                                    <Form.Item
+                                        label="Visit Date"
+                                        name="occurredAt"
+                                        rules={[
+                                            {
+                                                required: true,
+                                                message:
+                                                    "Please select visit date!",
+                                            },
+                                        ]}
+                                        getValueProps={createGetValueProps(
+                                            "DATE",
+                                        )}
+                                        normalize={createNormalize("DATE")}
+                                    >
+                                        <DatePicker
+                                            style={{ width: "100%" }}
+                                            placeholder="Select date"
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col span={12}>
+                                    <Form.Item
+                                        label="Service Type"
+                                        name="mrKZWf2WMIC"
+                                        rules={[
+                                            {
+                                                required: true,
+                                                message:
+                                                    "Please select service type!",
+                                            },
+                                        ]}
+                                        getValueProps={createGetValueProps(
+                                            "MULTI_TEXT",
+                                        )}
+                                        normalize={createNormalize(
+                                            "MULTI_TEXT",
+                                        )}
+                                    >
+                                        <Select
+                                            style={{ width: "100%" }}
+                                            options={serviceTypes}
+                                            fieldNames={{
+                                                label: "name",
+                                                value: "code",
+                                            }}
+                                            allowClear
+                                            mode="multiple"
+                                            placeholder="Select services"
+                                            showSearch={{
+                                                filterOption: (
+                                                    input,
+                                                    option,
+                                                ) =>
+                                                    option
+                                                        ? option.name
+                                                              .toLowerCase()
+                                                              .includes(
+                                                                  input.toLowerCase(),
+                                                              ) ||
+                                                          option.code
+                                                              .toLowerCase()
+                                                              .includes(
+                                                                  input.toLowerCase(),
+                                                              )
+                                                        : false,
+                                            }}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                        </Card>
+
+                        {/* Visit Details Tabs */}
                         <Tabs
                             tabPlacement="start"
                             items={program.programStages.flatMap((stage) => {
+                                const currentDataElements = new Map(
+                                    stage.programStageDataElements.map(
+                                        (psde) => [
+                                            psde.dataElement.id,
+                                            {
+                                                allowFutureDate:
+                                                    psde.allowFutureDate,
+                                                renderOptionsAsRadio:
+                                                    psde.renderType !==
+                                                    undefined,
+                                                compulsory: psde.compulsory,
+                                                vertical: psde.renderType
+                                                    ? psde.renderType.DESKTOP
+                                                          ?.type !==
+                                                      "HORIZONTAL_RADIOBUTTONS"
+                                                    : false,
+                                            },
+                                        ],
+                                    ),
+                                );
                                 if (
                                     [
                                         "opwSN351xGC",
@@ -500,6 +844,59 @@ function TrackedEntity() {
                                                     <Row gutter={24}>
                                                         {section.dataElements.flatMap(
                                                             (dataElement) => {
+                                                                const currentDataElement =
+                                                                    dataElements.get(
+                                                                        dataElement.id,
+                                                                    );
+                                                                const {
+                                                                    compulsory = false,
+                                                                    vertical = false,
+                                                                    renderOptionsAsRadio = false,
+                                                                } = currentDataElements.get(
+                                                                    dataElement.id,
+                                                                ) || {};
+
+                                                                const optionSet =
+                                                                    currentDataElement
+                                                                        ?.optionSet
+                                                                        ?.id ??
+                                                                    "";
+
+                                                                const hiddenOptions =
+                                                                    ruleResult
+                                                                        .hiddenOptions[
+                                                                        dataElement
+                                                                            .id
+                                                                    ];
+
+                                                                const shownOptionGroups =
+                                                                    ruleResult
+                                                                        .shownOptionGroups[
+                                                                        dataElement
+                                                                            .id
+                                                                    ] ||
+                                                                    new Set<string>();
+
+                                                                let finalOptions =
+                                                                    optionSets
+                                                                        .get(
+                                                                            optionSet,
+                                                                        )
+                                                                        ?.flatMap(
+                                                                            (
+                                                                                o,
+                                                                            ) => {
+                                                                                if (
+                                                                                    hiddenOptions?.has(
+                                                                                        o.id,
+                                                                                    )
+                                                                                ) {
+                                                                                    return [];
+                                                                                }
+                                                                                return o;
+                                                                            },
+                                                                        );
+
                                                                 if (
                                                                     ruleResult.hiddenFields.has(
                                                                         dataElement.id,
@@ -508,22 +905,31 @@ function TrackedEntity() {
                                                                     return [];
                                                                 }
 
-                                                                const finalOptions =
-                                                                    dataElement.optionSet?.options.flatMap(
-                                                                        (o) => {
-                                                                            if (
-                                                                                ruleResult.hiddenOptions[
-                                                                                    dataElement
-                                                                                        .id
-                                                                                ]?.has(
-                                                                                    o.id,
-                                                                                )
-                                                                            ) {
-                                                                                return [];
-                                                                            }
-                                                                            return o;
-                                                                        },
-                                                                    );
+                                                                if (
+                                                                    shownOptionGroups.size >
+                                                                    0
+                                                                ) {
+                                                                    const currentOptions =
+                                                                        optionGroups.get(
+                                                                            shownOptionGroups
+                                                                                .values()
+                                                                                .next()
+                                                                                .value,
+                                                                        ) ?? [];
+                                                                    finalOptions =
+                                                                        currentOptions.map(
+                                                                            ({
+                                                                                code,
+                                                                                id,
+                                                                                name,
+                                                                            }) => ({
+                                                                                id,
+                                                                                code,
+                                                                                name,
+                                                                                optionSet,
+                                                                            }),
+                                                                        );
+                                                                }
 
                                                                 const errors =
                                                                     ruleResult.errors.filter(
@@ -543,34 +949,20 @@ function TrackedEntity() {
                                                                             msg.key ===
                                                                             dataElement.id,
                                                                     );
-                                                                const required =
-                                                                    allDataElements.get(
-                                                                        dataElement.id,
-                                                                    )
-                                                                        ?.compulsory ??
-                                                                    false;
 
                                                                 return (
                                                                     <DataElementField
                                                                         dataElement={
-                                                                            dataElement
+                                                                            currentDataElement!
                                                                         }
-                                                                        hidden={ruleResult.hiddenFields.has(
-                                                                            dataElement.id,
-                                                                        )}
-                                                                        renderOptionsAsRadio={
-                                                                            allDataElements.get(
-                                                                                dataElement.id,
-                                                                            )
-                                                                                ?.renderOptionsAsRadio ??
+                                                                        hidden={
                                                                             false
+                                                                        }
+                                                                        renderOptionsAsRadio={
+                                                                            renderOptionsAsRadio
                                                                         }
                                                                         vertical={
-                                                                            allDataElements.get(
-                                                                                dataElement.id,
-                                                                            )
-                                                                                ?.vertical ??
-                                                                            false
+                                                                            vertical
                                                                         }
                                                                         finalOptions={
                                                                             finalOptions
@@ -585,10 +977,13 @@ function TrackedEntity() {
                                                                             errors
                                                                         }
                                                                         required={
-                                                                            required
+                                                                            compulsory
                                                                         }
                                                                         key={
                                                                             dataElement.id
+                                                                        }
+                                                                        form={
+                                                                            visitForm
                                                                         }
                                                                     />
                                                                 );
@@ -601,19 +996,168 @@ function TrackedEntity() {
                                     },
                                 );
                             })}
+                            tabBarStyle={{
+                                background: "#fff",
+                                borderRadius: 0,
+                                padding: "12px 8px",
+                                boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+                            }}
                             styles={{
                                 content: {
-                                    height: "62vh",
+                                    height: "63vh",
                                     overflow: "auto",
-                                    padding: 12,
+                                    padding: "24px 24px",
                                     margin: 0,
+                                    background: "#fff",
+                                    borderRadius: 0,
+                                    boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+                                    marginLeft: 8,
                                 },
                                 header: {
-                                    height: "62vh",
+                                    height: "63vh",
                                     overflow: "auto",
                                 },
                             }}
                         />
+                    </Flex>
+                </Form>
+            </Modal>
+
+            {/* Nested Modal for Patient Registration */}
+            <Modal
+                key={nestedModalKey}
+                open={isNestedModalOpen}
+                onCancel={closeNestedModal}
+                centered
+                title={
+                    <Flex align="center" gap="middle">
+                        <div
+                            style={{
+                                width: 40,
+                                height: 40,
+                                borderRadius: "50%",
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#fff",
+                            }}
+                        >
+                            <UserAddOutlined style={{ fontSize: 20 }} />
+                        </div>
+                        <Text strong style={{ fontSize: 18, color: "#1f2937" }}>
+                            Patient Registration
+                        </Text>
+                    </Flex>
+                }
+                width="85vw"
+                footer={
+                    <Flex
+                        justify="end"
+                        gap="middle"
+                        style={{ padding: "8px 0" }}
+                    >
+                        <Button
+                            onClick={closeNestedModal}
+                            style={{ borderRadius: 8 }}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="primary"
+                            onClick={handleNestedFormSubmit}
+                            style={{
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                borderColor: "#7c3aed",
+                                borderRadius: 8,
+                                fontWeight: 500,
+                                paddingLeft: 32,
+                                paddingRight: 32,
+                            }}
+                        >
+                            Register Patient
+                        </Button>
+                    </Flex>
+                }
+                styles={{
+                    body: {
+                        maxHeight: "75vh",
+                        overflow: "auto",
+                    },
+                    container: {
+                        backgroundColor: "#f5f5f5",
+                    },
+                }}
+            >
+                <Form
+                    form={nestedForm}
+                    layout="vertical"
+                    onFinish={handleNestedSubmit}
+                    style={{ margin: 0, padding: 0 }}
+                >
+                    <Flex vertical gap={10}>
+                        {program.programSections.map(
+                            ({ name, trackedEntityAttributes: tei, id }) => (
+                                <Card
+                                    title={name}
+                                    key={id}
+                                    style={{ borderRadius: 0 }}
+                                    size="small"
+                                >
+                                    <Row gutter={[16, 0]}>
+                                        {tei.map(({ id }) => {
+                                            const current =
+                                                trackedEntityAttributes.get(
+                                                    id,
+                                                )!;
+                                            const optionSet =
+                                                current.optionSet?.id ?? "";
+                                            const finalOptions =
+                                                optionSets.get(optionSet);
+                                            const allAttributes: Map<
+                                                string,
+                                                boolean
+                                            > = new Map(
+                                                program.programTrackedEntityAttributes.map(
+                                                    ({
+                                                        mandatory,
+                                                        trackedEntityAttribute:
+                                                            { id },
+                                                    }) => [id, mandatory],
+                                                ),
+                                            );
+
+                                            return (
+                                                <DataElementField
+                                                    key={id}
+                                                    dataElement={current}
+                                                    hidden={false}
+                                                    renderOptionsAsRadio={false}
+                                                    vertical={false}
+                                                    finalOptions={finalOptions}
+                                                    messages={[]}
+                                                    warnings={[]}
+                                                    errors={[]}
+                                                    required={
+                                                        allAttributes.get(id) ||
+                                                        false
+                                                    }
+                                                    span={6}
+                                                    form={nestedForm}
+                                                    customLabel={
+                                                        attributeLabelOverrides[
+                                                            id
+                                                        ]
+                                                    }
+                                                />
+                                            );
+                                        })}
+                                    </Row>
+                                </Card>
+                            ),
+                        )}
                     </Flex>
                 </Form>
             </Modal>

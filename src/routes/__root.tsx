@@ -1,12 +1,24 @@
 import { useDataEngine } from "@dhis2/app-runtime";
 import { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, Outlet } from "@tanstack/react-router";
-import React from "react";
+import React, { useMemo } from "react";
 
 import { Flex } from "antd";
-import { resourceQueryOptions } from "../query-options";
-import { Program, ProgramRule, ProgramRuleVariable } from "../schemas";
+import { AppHeader } from "../components/app-header";
+import { SyncErrorBoundary } from "../components/sync-error-boundary";
+import { db } from "../db";
+import { createSyncManager } from "../db/sync";
 import { TrackerContext } from "../machines/tracker";
+import { resourceQueryOptions } from "../query-options";
+import { loadVillagesIfNeeded } from "../utils/village-loader";
+import {
+    DataElement,
+    Program,
+    ProgramRule,
+    ProgramRuleVariable,
+    TrackedEntityAttribute,
+} from "../schemas";
+import { groupBy } from "lodash";
 
 export const RootRoute = createRootRouteWithContext<{
     queryClient: QueryClient;
@@ -14,25 +26,6 @@ export const RootRoute = createRootRouteWithContext<{
 }>()({
     component: RootRouteComponent,
     loader: async ({ context: { queryClient, engine } }) => {
-        const { options } = await queryClient.ensureQueryData(
-            resourceQueryOptions<{
-                options: { id: string; name: string; code: string }[];
-            }>({
-                engine,
-                resource: "optionSets/QwsvSPpnRul/options",
-            }),
-        );
-        const program = await queryClient.ensureQueryData(
-            resourceQueryOptions<Program>({
-                engine,
-                resource: "programs",
-                id: "ueBhWkWll5v",
-                params: {
-                    fields: "id,name,trackedEntityType[id,featureType],programType,featureType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,featureType,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,description,displayName,dataElements[id,name,code,valueType,formName,optionSetValue,optionSet[id,name,options[id,name,code]]]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,formName,optionSet[id,name,options[id,name,code]]]]",
-                },
-            }),
-        );
-
         const me = await queryClient.ensureQueryData(
             resourceQueryOptions<{
                 organisationUnits: {
@@ -42,73 +35,194 @@ export const RootRoute = createRootRouteWithContext<{
                     parent?: { id: string };
                     leaf: boolean;
                 }[];
+                id: string;
             }>({
                 engine,
                 resource: "me",
                 params: {
-                    fields: "organisationUnits[id,name,level,parent,leaf]",
+                    fields: "id,organisationUnits[id,name,level,parent,leaf]",
                 },
             }),
         );
-
-        const programRules = await queryClient.ensureQueryData(
-            resourceQueryOptions<{ programRules: ProgramRule[] }>({
-                engine,
-                resource: `programRules.json`,
-                params: {
-                    filter: "program.id:eq:ueBhWkWll5v",
-                    fields: "*,programRuleActions[*]",
-                    paging: false,
-                },
-            }),
-        );
-
-        const programRuleVariables = await queryClient.ensureQueryData(
-            resourceQueryOptions<{
-                programRuleVariables: ProgramRuleVariable[];
-            }>({
-                engine,
-                resource: `programRuleVariables.json`,
-                params: {
-                    filter: "program.id:eq:ueBhWkWll5v",
-                    fields: "*",
-                    paging: false,
-                },
-            }),
-        );
-
-        const allDataElements: Map<
-            string,
-            {
-                allowFutureDate: boolean;
-                renderOptionsAsRadio: boolean;
-                compulsory: boolean;
-                vertical: boolean;
-            }
-        > = new Map(
-            program.programStages
-                .flatMap((ps) => ps.programStageDataElements)
-                .map((psde) => [
-                    psde.dataElement.id,
-                    {
-                        allowFutureDate: psde.allowFutureDate,
-                        renderOptionsAsRadio: psde.renderType !== undefined,
-                        compulsory: psde.compulsory,
-                        vertical: psde.renderType
-                            ? psde.renderType.DESKTOP?.type !==
-                              "HORIZONTAL_RADIOBUTTONS"
-                            : false,
+        await loadVillagesIfNeeded();
+        const prevDataElements = await db.dataElements.count();
+        const prevAttributes = await db.trackedEntityAttributes.count();
+        const prevProgramRules = await db.programRules.count();
+        const prevProgramRuleVariables = await db.programRuleVariables.count();
+        const prevOptionGroups = await db.optionGroups.count();
+        const prevOptionSets = await db.optionSets.count();
+        const prevPrograms = await db.programs.count();
+        if (
+            prevDataElements === 0 ||
+            prevAttributes === 0 ||
+            prevProgramRules === 0 ||
+            prevProgramRuleVariables === 0 ||
+            prevOptionGroups === 0 ||
+            prevOptionSets === 0 ||
+            prevPrograms === 0
+        ) {
+            const program = await queryClient.ensureQueryData(
+                resourceQueryOptions<Program>({
+                    engine,
+                    resource: "programs",
+                    id: "ueBhWkWll5v",
+                    params: {
+                        fields: "id,name,programSections[id,name,sortOrder,trackedEntityAttributes[id]],trackedEntityType[id,trackedEntityTypeAttributes[id]],programType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,dataElements[id]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id]]",
                     },
-                ]),
-        );
+                }),
+            );
+            const { optionSets } = await queryClient.ensureQueryData(
+                resourceQueryOptions<{
+                    optionSets: {
+                        id: string;
+                        options: { id: string; name: string; code: string }[];
+                    }[];
+                }>({
+                    engine,
+                    resource: "optionSets",
+                    params: {
+                        fields: "id,options[id,name,code]",
+                        paging: false,
+                    },
+                }),
+            );
+            const { dataElements } = await queryClient.ensureQueryData(
+                resourceQueryOptions<{ dataElements: DataElement[] }>({
+                    engine,
+                    resource: "dataElements",
+                    params: {
+                        fields: "id,name,code,valueType,formName,optionSetValue,optionSet[id]",
+                        paging: false,
+                    },
+                }),
+            );
+
+            const { trackedEntityAttributes } =
+                await queryClient.ensureQueryData(
+                    resourceQueryOptions<{
+                        trackedEntityAttributes: TrackedEntityAttribute[];
+                    }>({
+                        engine,
+                        resource: "trackedEntityAttributes",
+                        params: {
+                            fields: "id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,formName,optionSet[id]",
+                            paging: false,
+                        },
+                    }),
+                );
+            const { programRules } = await queryClient.ensureQueryData(
+                resourceQueryOptions<{ programRules: ProgramRule[] }>({
+                    engine,
+                    resource: `programRules.json`,
+                    params: {
+                        filter: "program.id:eq:ueBhWkWll5v",
+                        fields: "*,programRuleActions[*]",
+                        paging: false,
+                    },
+                }),
+            );
+            const { programRuleVariables } = await queryClient.ensureQueryData(
+                resourceQueryOptions<{
+                    programRuleVariables: ProgramRuleVariable[];
+                }>({
+                    engine,
+                    resource: `programRuleVariables.json`,
+                    params: {
+                        filter: "program.id:eq:ueBhWkWll5v",
+                        fields: "*",
+                        paging: false,
+                    },
+                }),
+            );
+            const { optionGroups } = await queryClient.ensureQueryData(
+                resourceQueryOptions<{
+                    optionGroups: Array<{
+                        id: string;
+                        options: {
+                            id: string;
+                            name: string;
+                            code: string;
+                        }[];
+                    }>;
+                }>({
+                    engine,
+                    resource: "optionGroups",
+                    params: {
+                        fields: "id,options[id,name,code]",
+                        paging: false,
+                    },
+                }),
+            );
+
+            const finalOptionGroups = optionGroups.flatMap((og) =>
+                og.options.map((o) => ({
+                    ...o,
+                    optionGroup: og.id,
+                })),
+            );
+            const finalOptionSets = optionSets.flatMap((os) =>
+                os.options.map((o) => ({
+                    ...o,
+                    optionSet: os.id,
+                })),
+            );
+            await db.programs.bulkPut([program]);
+            await db.dataElements.bulkPut(dataElements);
+            await db.trackedEntityAttributes.bulkPut(trackedEntityAttributes);
+            await db.programRules.bulkPut(programRules);
+            await db.programRuleVariables.bulkPut(programRuleVariables);
+            await db.optionGroups.bulkPut(finalOptionGroups);
+            await db.optionSets.bulkPut(finalOptionSets);
+            return {
+                ...me,
+                dataElements: new Map(dataElements.map((de) => [de.id, de])),
+                trackedEntityAttributes: new Map(
+                    trackedEntityAttributes.map((ta) => [ta.id, ta]),
+                ),
+                programRules: programRules,
+                programRuleVariables: programRuleVariables,
+                optionGroups: new Map(
+                    Object.entries(
+                        groupBy(finalOptionGroups, "optionGroup"),
+                    ).map(([id, og]) => [id, og]),
+                ),
+                optionSets: new Map(
+                    Object.entries(groupBy(finalOptionSets, "optionSet")).map(
+                        ([id, os]) => [id, os],
+                    ),
+                ),
+                program,
+            };
+        }
+
+        const dataElements = await db.dataElements.toArray();
+        const trackedEntityAttributes =
+            await db.trackedEntityAttributes.toArray();
+        const programRules = await db.programRules.toArray();
+        const programRuleVariables = await db.programRuleVariables.toArray();
+        const optionGroups = await db.optionGroups.toArray();
+        const optionSets = await db.optionSets.toArray();
+        const programs = await db.programs.toArray();
 
         return {
-            program,
-            organisationUnits: me.organisationUnits,
+            ...me,
+            dataElements: new Map(dataElements.map((de) => [de.id, de])),
+            trackedEntityAttributes: new Map(
+                trackedEntityAttributes.map((ta) => [ta.id, ta]),
+            ),
             programRules,
             programRuleVariables,
-            serviceTypes: options,
-            allDataElements,
+            optionGroups: new Map(
+                Object.entries(groupBy(optionGroups, "optionGroup")).map(
+                    ([id, og]) => [id, og],
+                ),
+            ),
+            optionSets: new Map(
+                Object.entries(groupBy(optionSets, "optionSet")).map(
+                    ([id, os]) => [id, os],
+                ),
+            ),
+            program: programs[0],
         };
     },
 });
@@ -116,30 +230,86 @@ export const RootRoute = createRootRouteWithContext<{
 function RootRouteComponent() {
     const { engine } = RootRoute.useRouteContext();
     const navigate = RootRoute.useNavigate();
-    const { organisationUnits, program } = RootRoute.useLoaderData();
+    const {
+        organisationUnits,
+        trackedEntityAttributes,
+        programRules,
+        programRuleVariables,
+        optionGroups,
+        optionSets,
+        dataElements,
+    } = RootRoute.useLoaderData();
+    // Initialize sync manager (memoized to prevent recreation on re-renders)
+    const syncManager = useMemo(() => {
+        console.log("🔧 Initializing Sync Manager...");
+        const manager = createSyncManager(engine);
+        // Start auto-sync every 30 seconds
+        manager.startAutoSync(3000);
+
+        return manager;
+    }, [engine]);
+
+    // Initialize database and cleanup on unmount
+    // useEffect(() => {
+    //     console.log("📦 Initializing IndexedDB database...");
+
+    // Database is automatically initialized when imported
+    // Check if it's accessible
+    //     db.open()
+    //         .then(() => {
+    //             console.log("✅ Database initialized successfully");
+    //         })
+    //         .catch((error) => {
+    //             console.error("❌ Database initialization failed:", error);
+    //         });
+
+    //     // Cleanup on unmount
+    //     return () => {
+    //         console.log("🧹 Cleaning up Sync Manager...");
+    //         syncManager.stopAutoSync();
+    //     };
+    // }, [syncManager]);
+
     return (
-        <TrackerContext.Provider
-            options={{
-                input: {
-                    engine,
-                    navigate,
-                    organisationUnits,
-                    programTrackedEntityAttributes:
-                        program.programTrackedEntityAttributes,
-                },
+        <SyncErrorBoundary
+            onReset={() => {
+                console.log("🔄 Error boundary reset");
+                // Optionally restart sync manager
+                syncManager.startAutoSync(30000);
             }}
         >
-            <Flex
-                vertical
-                style={{
-                    height: "calc(100vh - 48px)",
-                    minHeight: "calc(100vh - 48px)",
-                    padding: 10,
-                    backgroundColor: "#f5f5f5",
+            <TrackerContext.Provider
+                options={{
+                    input: {
+                        engine,
+                        navigate,
+                        organisationUnits,
+                        syncManager,
+                    },
                 }}
             >
-                <Outlet />
-            </Flex>
-        </TrackerContext.Provider>
+                <Flex
+                    vertical
+                    style={{
+                        height: "calc(100vh - 48px)",
+                        minHeight: "calc(100vh - 48px)",
+                        backgroundColor: "#f5f5f5",
+                    }}
+                >
+                    <AppHeader title="MOH Registers" />
+                    <Flex
+                        vertical
+                        style={{
+                            height: "calc(100vh - 96px)",
+                            minHeight: "calc(100vh - 96px)",
+                            padding: 10,
+                            overflowY: "auto",
+                        }}
+                    >
+                        <Outlet />
+                    </Flex>
+                </Flex>
+            </TrackerContext.Provider>
+        </SyncErrorBoundary>
     );
 }

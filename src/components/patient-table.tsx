@@ -1,8 +1,7 @@
 import {
     CloseOutlined,
-    MoreOutlined,
     FilterOutlined,
-    PlusOutlined,
+    MoreOutlined,
     SearchOutlined,
     SettingOutlined,
 } from "@ant-design/icons";
@@ -26,6 +25,7 @@ import { FilterDropdownProps } from "antd/es/table/interface";
 import dayjs from "dayjs";
 import React, { useMemo, useRef, useState } from "react";
 import { TrackerContext } from "../machines/tracker";
+import { RootRoute } from "../routes/__root";
 import { TrackedEntityAttribute } from "../schemas";
 import { flattenTrackedEntityResponse } from "../utils/utils";
 import { PatientLastVisit } from "./patient-last-visit";
@@ -54,6 +54,7 @@ const getInitialsColor = (values: Record<string, any>) => {
 };
 
 export const PatientTable: React.FC = () => {
+    const { program, trackedEntityAttributes } = RootRoute.useLoaderData();
     const searchInput = useRef<InputRef>(null);
     const [searchText, setSearchText] = useState("");
 
@@ -64,18 +65,18 @@ export const PatientTable: React.FC = () => {
         (state) => state.context.trackedEntities,
     );
     const trackerActor = TrackerContext.useActorRef();
-    const attributes = TrackerContext.useSelector(
-        (state) => state.context.programTrackedEntityAttributes,
-    );
-    const total = TrackerContext.useSelector(
-        (state) => state.context.search.pagination.total,
-    );
-    const pageSize = TrackerContext.useSelector(
-        (state) => state.context.search.pagination.pageSize,
-    );
-    const current = TrackerContext.useSelector(
-        (state) => state.context.search.pagination.current,
-    );
+    // const attributes = TrackerContext.useSelector(
+    //     (state) => state.context.attributes,
+    // );
+    // const total = TrackerContext.useSelector(
+    //     (state) => state.context.search.pagination.total,
+    // );
+    // const pageSize = TrackerContext.useSelector(
+    //     (state) => state.context.search.pagination.pageSize,
+    // );
+    // const current = TrackerContext.useSelector(
+    //     (state) => state.context.search.pagination.current,
+    // );
 
     const isLoading = TrackerContext.useSelector((state) =>
         state.matches("loading"),
@@ -91,12 +92,12 @@ export const PatientTable: React.FC = () => {
         confirm();
         // Send filter update to state machine
         trackerActor.send({
-            type: "FETCH_NEXT_PAGE",
+            type: "SEARCH",
             search: {
-                pagination: {
-                    current,
-                    pageSize,
-                },
+                // pagination: {
+                //     current,
+                //     pageSize,
+                // },
                 filters: {
                     ...activeFilters,
                     [dataIndex]: selectedKeys,
@@ -112,12 +113,12 @@ export const PatientTable: React.FC = () => {
             const newFilters = { ...activeFilters };
             delete newFilters[dataIndex];
             trackerActor.send({
-                type: "FETCH_NEXT_PAGE",
+                type: "SEARCH",
                 search: {
-                    pagination: {
-                        current,
-                        pageSize,
-                    },
+                    // pagination: {
+                    //     current,
+                    //     pageSize,
+                    // },
                     filters: newFilters,
                 },
             });
@@ -125,26 +126,16 @@ export const PatientTable: React.FC = () => {
     };
 
     const getFilterDisplayName = (key: string) => {
-        const element = attributes.find(
-            (de) => de.trackedEntityAttribute.id === key,
-        );
-        return (
-            element?.trackedEntityAttribute.displayFormName ||
-            element?.trackedEntityAttribute.name ||
-            key
-        );
+        const element = trackedEntityAttributes.get(key);
+        return element?.displayFormName || element?.name || key;
     };
 
     const removeFilter = (filterKey: string) => {
         const newFilters = { ...activeFilters };
         delete newFilters[filterKey];
         trackerActor.send({
-            type: "FETCH_NEXT_PAGE",
+            type: "SEARCH",
             search: {
-                pagination: {
-                    current,
-                    pageSize,
-                },
                 filters: newFilters,
             },
         });
@@ -152,12 +143,8 @@ export const PatientTable: React.FC = () => {
 
     const clearAllFilters = () => {
         trackerActor.send({
-            type: "FETCH_NEXT_PAGE",
+            type: "SEARCH",
             search: {
-                pagination: {
-                    current,
-                    pageSize,
-                },
                 filters: {},
             },
         });
@@ -331,11 +318,17 @@ export const PatientTable: React.FC = () => {
                     value: opt.code,
                 })),
                 filteredValue: activeFilters[dataIndex.id] || null,
-                onFilterDropdownOpenChange: (visible) => {
-                    if (visible) {
-                        setTimeout(() => searchInput.current?.select(), 100);
-                    }
+                filterDropdownProps: {
+                    onOpenChange: (open) => {
+                        if (open) {
+                            setTimeout(
+                                () => searchInput.current?.select(),
+                                100,
+                            );
+                        }
+                    },
                 },
+
                 filterIcon: (filtered: boolean) => (
                     <SearchOutlined
                         style={{ color: filtered ? "#1677ff" : undefined }}
@@ -347,10 +340,12 @@ export const PatientTable: React.FC = () => {
         return {
             filterDropdown,
             filteredValue: activeFilters[dataIndex.id] || null,
-            onFilterDropdownOpenChange: (visible) => {
-                if (visible) {
-                    setTimeout(() => searchInput.current?.select(), 100);
-                }
+            filterDropdownProps: {
+                onOpenChange: (open) => {
+                    if (open) {
+                        setTimeout(() => searchInput.current?.select(), 100);
+                    }
+                },
             },
             filterIcon: (filtered: boolean) => (
                 <SearchOutlined
@@ -364,7 +359,7 @@ export const PatientTable: React.FC = () => {
         ReturnType<typeof flattenTrackedEntityResponse>[number]
     >["onChange"] = (pagination, filters, sorter) => {
         trackerActor.send({
-            type: "FETCH_NEXT_PAGE",
+            type: "SEARCH",
             search: { pagination, filters },
         });
     };
@@ -375,64 +370,61 @@ export const PatientTable: React.FC = () => {
         return [
             {
                 displayInList: true,
-                trackedEntityAttribute: {
-                    displayFormName: "Patient Name",
-                    name: "Patient Name",
-                    id: "patientName",
-                    valueType: "TEXT",
-                    optionSetValue: false,
-                    generated: false,
-                    unique: false,
-                    pattern: "",
-                    confidential: false,
-                },
+                displayFormName: "Patient Name",
+                name: "Patient Name",
+                id: "patientName",
+                valueType: "TEXT",
+                optionSetValue: false,
+                generated: false,
+                unique: false,
+                pattern: "",
+                confidential: false,
             },
 
             {
                 displayInList: true,
-                trackedEntityAttribute: {
-                    displayFormName: "Registration Date",
-                    name: "Registration Date",
-                    id: "enrolledAt",
-                    valueType: "DATE",
-                    optionSetValue: false,
-                    generated: false,
-                    unique: false,
-                    pattern: "",
-                    confidential: false,
-                },
+                displayFormName: "Registration Date",
+                name: "Registration Date",
+                id: "enrolledAt",
+                valueType: "DATE",
+                optionSetValue: false,
+                generated: false,
+                unique: false,
+                pattern: "",
+                confidential: false,
             },
-            ...attributes,
+            ...program.programTrackedEntityAttributes.map(
+                ({ trackedEntityAttribute: { id }, ...rest }) => ({
+                    ...rest,
+                    ...trackedEntityAttributes.get(id)!,
+                }),
+            ),
             {
                 displayInList: true,
-                trackedEntityAttribute: {
-                    displayFormName: "Last Visit",
-                    name: "Last Visit",
-                    id: "lastVisit",
-                    valueType: "DATE",
-                    optionSetValue: false,
-                    generated: false,
-                    unique: false,
-                    pattern: "",
-                    confidential: false,
-                },
+                displayFormName: "Last Visit",
+                name: "Last Visit",
+                id: "lastVisit",
+                valueType: "DATE",
+                optionSetValue: false,
+                generated: false,
+                unique: false,
+                pattern: "",
+                confidential: false,
             },
             {
                 displayInList: true,
-                trackedEntityAttribute: {
-                    displayFormName: "Actions",
-                    name: "Actions",
-                    id: "actions",
-                    valueType: "TEXT",
-                    optionSetValue: false,
-                    generated: false,
-                    unique: false,
-                    pattern: "",
-                    confidential: false,
-                },
+                displayFormName: "Actions",
+                name: "Actions",
+                id: "actions",
+                valueType: "TEXT",
+                optionSetValue: false,
+                generated: false,
+                unique: false,
+                pattern: "",
+                confidential: false,
             },
-        ].flatMap(({ trackedEntityAttribute, ...rest }) => {
-            if (!rest.displayInList) {
+        ].flatMap((trackedEntityAttribute) => {
+            if (!trackedEntityAttribute.displayInList) {
                 return [];
             }
 
@@ -494,11 +486,23 @@ export const PatientTable: React.FC = () => {
                         trackedEntityAttribute.displayFormName ||
                         trackedEntityAttribute.name,
                     key: trackedEntityAttribute.id,
-                    render: (_, record) => (
-                        <PatientLastVisit
-                            trackedEntity={record.trackedEntity}
-                        />
-                    ),
+                    render: (_, record) => {
+                        const lastVisit = record.events
+                            .filter((e) => e.programStage === "K2nxbE9ubSs")
+                            .sort((a, b) =>
+                                dayjs(b.occurredAt).diff(dayjs(a.occurredAt)),
+                            );
+                        if (lastVisit.length === 0) {
+                            return <div>No visit</div>;
+                        }
+                        return (
+                            <Tag color="green" style={{ fontSize: 16 }}>
+                                {dayjs(lastVisit[0].occurredAt).format(
+                                    "DD/MM/YYYY",
+                                )}
+                            </Tag>
+                        );
+                    },
                 };
             }
             if (trackedEntityAttribute.id === "actions") {
@@ -546,25 +550,29 @@ export const PatientTable: React.FC = () => {
                 ...getColumnSearchProps(trackedEntityAttribute),
             };
         });
-    }, [attributes, activeFilters]);
+    }, [activeFilters]);
 
     const columnSelectorContent = (
         <Space vertical>
-            {attributes.map((col) => (
-                <Checkbox
-                    key={col.id}
-                    checked={col.displayInList}
-                    onChange={() =>
-                        trackerActor.send({
-                            type: "TOGGLE_ATTRIBUTE_COLUMN",
-                            attributeId: col.id,
-                        })
-                    }
-                >
-                    {col.trackedEntityAttribute.displayFormName ||
-                        col.trackedEntityAttribute.name}
-                </Checkbox>
-            ))}
+            {program.programTrackedEntityAttributes.map((col) => {
+                const attribute = trackedEntityAttributes.get(
+                    col.trackedEntityAttribute.id,
+                );
+                return (
+                    <Checkbox
+                        key={col.id}
+                        checked={col.displayInList}
+                        onChange={() =>
+                            trackerActor.send({
+                                type: "TOGGLE_ATTRIBUTE_COLUMN",
+                                attributeId: col.id,
+                            })
+                        }
+                    >
+                        {attribute?.displayFormName || attribute?.name}
+                    </Checkbox>
+                );
+            })}
         </Space>
     );
 
@@ -673,16 +681,7 @@ export const PatientTable: React.FC = () => {
                                 {/* Columns ({visibleCount}/{columns.length}) */}
                             </Button>
                         </Popover>
-                        {/* <Button
-                            type="primary"
-                            icon={<PlusOutlined />}
-                            style={{
-                                backgroundColor: "#7c3aed",
-                                borderColor: "#7c3aed",
-                            }}
-                        >
-                            Add Patient
-                        </Button> */}
+
                         <TrackerRegistration />
                     </Space>
                 </div>
@@ -696,8 +695,8 @@ export const PatientTable: React.FC = () => {
                         return {
                             onClick: () => {
                                 trackerActor.send({
-                                    type: "SET_TRACKED_ENTITY_ID",
-                                    trackedEntityId: record.trackedEntity,
+                                    type: "SET_TRACKED_ENTITY",
+                                    trackedEntity: record,
                                 });
                             },
                             style: { cursor: "pointer" },
@@ -705,13 +704,7 @@ export const PatientTable: React.FC = () => {
                     }}
                     loading={isLoading}
                     onChange={handleTableChange}
-                    pagination={{
-                        pageSize,
-                        total,
-                        current,
-                        showSizeChanger: true,
-                        showTotal: (total) => `Total ${total} patients`,
-                    }}
+                    pagination={false}
                 />
             </div>
         </Flex>

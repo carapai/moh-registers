@@ -1,4 +1,4 @@
-import { TablePaginationConfig } from "antd";
+import { GetProp, TablePaginationConfig, TreeSelectProps } from "antd";
 import { FilterValue } from "antd/es/table/interface";
 import z from "zod";
 
@@ -74,7 +74,7 @@ export const TrackedEntityAttributeSchema = z.object({
     pattern: z.string(),
     optionSetValue: z.boolean(),
     displayFormName: z.string(),
-		formName: z.string().optional(),
+    formName: z.string().optional(),
     id: z.string(),
 });
 
@@ -86,18 +86,33 @@ export const ProgramTrackedEntityAttributeSchema = z.object({
     trackedEntityAttribute: TrackedEntityAttributeSchema,
 });
 
+export const ProgramSectionSchema = z.object({
+    name: z.string(),
+    trackedEntityAttributes: z.array(z.object({ id: z.string() })),
+    sortOrder: z.number(),
+    displayName: z.string(),
+    id: z.string(),
+});
+
 export const ProgramSchema = z.object({
     name: z.string(),
     programType: z.string(),
     selectEnrollmentDatesInFuture: z.boolean(),
     selectIncidentDatesInFuture: z.boolean(),
-    trackedEntityType: z.object({ featureType: z.string(), id: z.string() }),
+    trackedEntityType: z.object({
+        featureType: z.string(),
+        id: z.string(),
+        trackedEntityTypeAttributes: z.array(
+            ProgramTrackedEntityAttributeSchema,
+        ),
+    }),
     id: z.string(),
     organisationUnits: z.array(z.object({ id: z.string() })),
     programStages: z.array(ProgramStageSchema),
     programTrackedEntityAttributes: z.array(
         ProgramTrackedEntityAttributeSchema,
     ),
+    programSections: z.array(ProgramSectionSchema),
 });
 
 export const ProgramRuleActionSchema = z.object({
@@ -114,6 +129,7 @@ export const ProgramRuleActionSchema = z.object({
         "SHOWOPTION",
         "HIDEOPTIONGROUP",
         "SHOWOPTIONGROUP",
+        "SHOWERROR",
     ]),
     dataElement: z
         .object({ displayName: z.string(), id: z.string() })
@@ -149,6 +165,8 @@ export const ProgramRuleSchema = z.object({
     displayName: z.string(),
     id: z.string(),
     attributeValues: z.array(z.unknown()),
+    programStage: z.object({ id: z.string() }).optional(),
+    program: z.object({ id: z.string() }).optional(),
 });
 
 export const ProgramRuleVariableSchema = z.object({
@@ -281,6 +299,29 @@ export const EventResponseSchema = z.object({
     events: z.array(EventSchema),
 });
 
+export const FDataElementSchema = DataElementSchema.extend({
+    programStage: z.string(),
+    programSection: z.string(),
+    compulsory: z.boolean(),
+    allowFutureDate: z.boolean(),
+    sortOrder: z.number(),
+    section: z.string(),
+    renderType: z
+        .object({
+            MOBILE: z.object({ type: z.string() }),
+            DESKTOP: z.object({ type: z.string() }),
+        })
+        .optional(),
+});
+
+export const FAttributeSchema = TrackedEntityAttributeSchema.extend({
+    sortOrder: z.number(),
+    mandatory: z.boolean(),
+    program: z.string(),
+    displayInList: z.boolean(),
+    section: z.string(),
+});
+
 export type Client = z.infer<typeof ClientSchema>;
 export type Program = z.infer<typeof ProgramSchema>;
 export type ProgramStage = z.infer<typeof ProgramStageSchema>;
@@ -305,6 +346,10 @@ export type TrackedEntityAttribute = z.infer<
     typeof TrackedEntityAttributeSchema
 >;
 export type EventResponse = z.infer<typeof EventResponseSchema>;
+export type ProgramSection = z.infer<typeof ProgramSectionSchema>;
+
+export type FDataElement = z.infer<typeof FDataElementSchema>;
+export type FAttribute = z.infer<typeof FAttributeSchema>;
 
 export type Message = {
     key: string;
@@ -327,6 +372,11 @@ export type ProgramRuleResult = {
 };
 
 export type OnChange = {
-    pagination: TablePaginationConfig;
+    pagination?: TablePaginationConfig;
     filters: Record<string, FilterValue | null>;
 };
+
+export type Node = Omit<
+    GetProp<TreeSelectProps, "treeData">[number],
+    "label"
+> & { user: string };
