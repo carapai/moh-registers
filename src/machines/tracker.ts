@@ -13,7 +13,6 @@ import type { SyncManager } from "../db/sync";
 import { queryClient } from "../query-client";
 import { resourceQueryOptions } from "../query-options";
 import {
-    FAttribute,
     OnChange,
     OrgUnit,
     ProgramRule,
@@ -28,6 +27,7 @@ import {
     executeProgramRules,
     flattenTrackedEntityResponse,
 } from "../utils/utils";
+import { MessageInstance } from "antd/es/message/interface";
 
 interface TrackerContext {
     trackedEntities: FlattenedTrackedEntity[];
@@ -40,18 +40,14 @@ interface TrackerContext {
     currentEvent: FlattenedTrackedEntity["events"][number];
     mainEvent: FlattenedTrackedEntity["events"][number];
     orgUnit: string;
-    // attributes: FAttribute[];
     eventUpdates: string[];
     search: OnChange;
-    // Separate rule results for each context
     registrationRuleResults: ProgramRuleResult;
     mainEventRuleResults: ProgramRuleResult;
     currentEventRuleResults: ProgramRuleResult;
-    // program: Program;
     modalState: "closed" | "creating" | "viewing" | "editing";
     syncManager?: SyncManager;
-    // programRules: ProgramRule[];
-    // programRuleVariables: ProgramRuleVariable[];
+    message: MessageInstance;
 }
 
 type TrackerEvents =
@@ -143,9 +139,7 @@ export const trackerMachine = setup({
             engine: ReturnType<typeof useDataEngine>;
             navigate: UseNavigateResult<"/">;
             organisationUnits: OrgUnit[];
-            // attributes: FAttribute[];
-            // programRules: ProgramRule[];
-            // programRuleVariables: ProgramRuleVariable[];
+            message: MessageInstance;
             syncManager?: SyncManager;
         },
     },
@@ -260,10 +254,6 @@ export const trackerMachine = setup({
                 data: { trackedEntities, enrollments },
                 params: { async: false },
             });
-
-            console.log("Tracked entity saved:", response);
-
-            // ✅ Return the tracked entity so it can be loaded into context
             return trackedEntity;
         }),
     },
@@ -292,7 +282,6 @@ export const trackerMachine = setup({
 
         resetMainEvent: assign({
             mainEvent: ({ context }) => {
-                // ✅ FIX: Use enrollment data from trackedEntity when available
                 const enrollment = context.trackedEntity?.enrollment;
                 return createEmptyEvent({
                     orgUnit: enrollment?.orgUnit || context.orgUnit,
@@ -307,7 +296,6 @@ export const trackerMachine = setup({
 
         resetCurrentEvent: assign({
             currentEvent: ({ context }) => {
-                // ✅ FIX: Use enrollment data from trackedEntity when available
                 const enrollment = context.trackedEntity?.enrollment;
                 return createEmptyEvent({
                     orgUnit: enrollment?.orgUnit || context.orgUnit,
@@ -503,7 +491,10 @@ export const trackerMachine = setup({
                 program: "ueBhWkWll5v",
             });
 
-            if (event.attributeValues !== undefined) {
+            // Route results based on programStage context, not just attributeValues presence
+            // attributeValues can be included for reference even in program stage events
+            if (event.programStage === undefined) {
+                // No programStage means this is registration
                 return { registrationRuleResults: results };
             } else if (event.programStage === context.mainEvent.programStage) {
                 return { mainEventRuleResults: results };
@@ -511,6 +502,41 @@ export const trackerMachine = setup({
                 return { currentEventRuleResults: results };
             }
         }),
+
+        // Notification actions
+        showSuccessNotification: ({ event, context: { message } }) => {
+            if (event.type === "CREATE_TRACKED_ENTITY") {
+                message.success({
+                    content: "Patient registered successfully!",
+                    duration: 3,
+                });
+            } else if (event.type === "CREATE_OR_UPDATE_EVENT") {
+                message.success({
+                    content: "Visit record saved successfully!",
+                    duration: 3,
+                });
+            } else if (event.type === "SAVE_EVENTS") {
+                message.success({
+                    content: "Events saved successfully!",
+                    duration: 3,
+                });
+            }
+        },
+
+        showErrorNotification: ({ context: { error, message } }) => {
+            message.error({
+                content: error || "An error occurred. Please try again.",
+                duration: 5,
+            });
+        },
+
+        showSavingNotification: ({ context: { message } }) => {
+            message.loading({
+                content: "Saving...",
+                duration: 2,
+            });
+        },
+
         updateDataWithAssignments: assign({
             trackedEntity: ({ context }) => {
                 return {
@@ -545,7 +571,7 @@ export const trackerMachine = setup({
     id: "tracker",
     initial: "initial",
     context: ({
-        input: { engine, navigate, organisationUnits, syncManager },
+        input: { engine, navigate, organisationUnits, syncManager, message },
     }) => {
         const defaultOrgUnit = organisationUnits[0]?.id || "";
         return {
@@ -622,6 +648,7 @@ export const trackerMachine = setup({
             },
             modalState: "closed",
             syncManager,
+            message,
         };
     },
     states: {
@@ -748,34 +775,6 @@ export const trackerMachine = setup({
                 },
             },
         },
-
-        // loadingEntity: {
-        //     entry: "gotoEntity",
-        //     invoke: {
-        //         src: "fetchTrackedEntity",
-        //         input: ({ context: { engine, trackedEntityId } }) => {
-        //             return { engine, trackedEntity: trackedEntityId! };
-        //         },
-        //         onDone: {
-        //             target: "entitySuccess",
-        //             actions: [
-        //                 assign({
-        //                     trackedEntity: ({ event }) => event.output,
-        //                 }),
-        //                 "persistTrackedEntity",
-        //             ],
-        //         },
-        //         onError: {
-        //             target: "failure",
-        //             actions: assign({
-        //                 error: ({ event }) =>
-        //                     event.error instanceof Error
-        //                         ? event.error.message
-        //                         : String(event.error),
-        //             }),
-        //         },
-        //     },
-        // },
         entitySuccess: {
             entry: "gotoEntity",
             on: {
@@ -889,6 +888,7 @@ export const trackerMachine = setup({
             },
         },
         saveTrackedEntity: {
+            entry: "showSavingNotification",
             invoke: {
                 src: "createOrUpdateTrackedEntity",
                 input: ({ context: { engine, trackedEntity } }) => {
@@ -896,29 +896,32 @@ export const trackerMachine = setup({
                 },
                 onDone: {
                     target: "entitySuccess",
-                    // ✅ Update context with saved entity and navigate to detail page
                     actions: [
                         assign({
                             trackedEntity: ({ event }) => event.output,
                             eventUpdates: () => [],
                         }),
                         "persistTrackedEntity",
+                        "showSuccessNotification",
                         "gotoEntity",
                     ],
                 },
                 onError: {
-                    // target: "failure",
-                    actions: assign({
-                        error: ({ event }) =>
-                            event.error instanceof Error
-                                ? event.error.message
-                                : String(event.error),
-                    }),
+                    actions: [
+                        assign({
+                            error: ({ event }) =>
+                                event.error instanceof Error
+                                    ? event.error.message
+                                    : String(event.error),
+                        }),
+                        "showErrorNotification",
+                    ],
                 },
             },
         },
 
         saveChildTrackedEntity: {
+            entry: "showSavingNotification",
             invoke: {
                 src: "createOrUpdateTrackedEntity",
                 input: ({ context: { engine }, event }) => {
@@ -926,28 +929,24 @@ export const trackerMachine = setup({
                     return { engine, trackedEntity: event.trackedEntity };
                 },
                 onDone: {
-                    // actions: [
-                    //     assign({
-                    //         trackedEntity: ({ event }) => event.output,
-                    //         eventUpdates: () => [],
-                    //     }),
-                    //     "persistTrackedEntity",
-                    //     "gotoEntity",
-                    // ],
+                    actions: "showSuccessNotification",
                 },
                 onError: {
-                    // target: "failure",
-                    actions: assign({
-                        error: ({ event }) =>
-                            event.error instanceof Error
-                                ? event.error.message
-                                : String(event.error),
-                    }),
+                    actions: [
+                        assign({
+                            error: ({ event }) =>
+                                event.error instanceof Error
+                                    ? event.error.message
+                                    : String(event.error),
+                        }),
+                        "showErrorNotification",
+                    ],
                 },
             },
         },
 
         optimisticUpdate: {
+            entry: "showSavingNotification",
             invoke: {
                 src: "createOrUpdateEvents",
                 input: ({
@@ -962,18 +961,23 @@ export const trackerMachine = setup({
                 },
                 onDone: {
                     target: "entitySuccess",
-                    actions: assign({
-                        eventUpdates: () => [],
-                    }),
+                    actions: [
+                        assign({
+                            eventUpdates: () => [],
+                        }),
+                        "showSuccessNotification",
+                    ],
                 },
                 onError: {
-                    // target: "failure",
-                    actions: assign({
-                        error: ({ event }) =>
-                            event.error instanceof Error
-                                ? event.error.message
-                                : String(event.error),
-                    }),
+                    actions: [
+                        assign({
+                            error: ({ event }) =>
+                                event.error instanceof Error
+                                    ? event.error.message
+                                    : String(event.error),
+                        }),
+                        "showErrorNotification",
+                    ],
                 },
             },
 

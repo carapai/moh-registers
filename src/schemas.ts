@@ -151,6 +151,7 @@ export const ProgramRuleActionSchema = z.object({
         .object({ id: z.string(), displayName: z.string() })
         .optional(),
     value: z.string().optional(),
+    data: z.string().optional(), // Expression for ASSIGN actions
     displayContent: z.string().optional(),
     content: z.string().optional(),
 });

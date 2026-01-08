@@ -15,10 +15,16 @@ const Registers: FC = () => {
                     Table: {
                         rowHoverBg: "#F1EFFD",
                         borderRadius: 0,
+                        headerBorderRadius: 0,
+                    },
+                    Card: {
+                        borderRadius: 0,
+												
                     },
                 },
                 token: {
                     fontSize: 16,
+										borderRadius: 0,
                 },
             }}
         >

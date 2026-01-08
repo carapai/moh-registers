@@ -17,8 +17,8 @@ import {
     TrackedEntityAttribute,
 } from "../schemas";
 import { createGetValueProps, createNormalize, isDate } from "../utils/utils";
-import VillageSelect from "./village-select";
 import DobPicker from "./dob-picker";
+import VillageSelect from "./village-select";
 
 export const DataElementField = React.memo<{
     dataElement: DataElement | TrackedEntityAttribute;
@@ -64,8 +64,6 @@ export const DataElementField = React.memo<{
                     ]}
                     syncParentFields
                     allowDirectSearch
-                    labelField="village_name"
-                    valueField="village_id"
                     sortField="village_name"
                 />
             );
@@ -171,7 +169,8 @@ export const DataElementField = React.memo<{
                     label={
                         dataElement.valueType === "BOOLEAN"
                             ? null
-                            : customLabel || `${dataElement.formName || dataElement.name}`
+                            : customLabel ||
+                              `${dataElement.formName || dataElement.name}`
                     }
                     name={dataElement.id}
                     required={required}

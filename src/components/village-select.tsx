@@ -1,8 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { Select, Form, FormInstance } from "antd";
+import { FormInstance, Select } from "antd";
 import { useLiveQuery } from "dexie-react-hooks";
+import React, { useState } from "react";
 import { db, Village } from "../db";
-import { loadVillagesIfNeeded } from "../utils/village-loader";
 
 interface WatchField {
     fieldId: string;
@@ -14,10 +13,7 @@ interface VillageSelectProps {
     onChange?: (value: string) => void;
     form: FormInstance<any>;
     watchFields: WatchField[];
-    indexKey?: string;
     filterFields?: string[];
-    valueField?: keyof Village;
-    labelField?: keyof Village;
     sortField?: keyof Village;
     allowDirectSearch?: boolean;
     syncParentFields?: boolean;
@@ -77,153 +73,18 @@ export default function VillageSelect({
     onChange,
     form,
     watchFields,
-    indexKey,
-    filterFields,
-    valueField = "village_name",
-    labelField = "village_name",
+    filterFields,    
     sortField = "village_name",
     allowDirectSearch = false,
     syncParentFields = false,
 }: VillageSelectProps) {
-    const [isLoading, setIsLoading] = useState(false);
     const [searchMode, setSearchMode] = useState(true);
 
-    // Load villages on component mount
-    useEffect(() => {
-        const init = async () => {
-            setIsLoading(true);
-            try {
-                await loadVillagesIfNeeded();
-            } catch (error) {
-                console.error("Failed to load villages:", error);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        init();
-    }, []);
-
-    // Watch all specified fields
-    // const watchedValues = watchFields.map((field) =>
-    //     Form.useWatch(field.fieldId, form),
-    // );
-
-    // Query all villages for search mode
     const villages = useLiveQuery(async () => {
         return await db.villages.orderBy(sortField).toArray();
     }, [allowDirectSearch, searchMode, sortField]);
 
-    // Query villages based on watched fields
-    // const villages = useLiveQuery(
-    //     async () => {
-    //         // If in search mode, show all villages
-    //         if (allowDirectSearch && searchMode) {
-    //             return allVillages;
-    //         }
-
-    //         // Check if all watched fields have values
-    //         const allFieldsFilled = watchedValues.every(
-    //             (val) => val != null && val !== "",
-    //         );
-
-    //         if (!allFieldsFilled) {
-    //             // If direct search is allowed and no fields are filled, allow searching all
-    //             if (allowDirectSearch) {
-    //                 setSearchMode(true);
-    //                 return [];
-    //             }
-    //             return [];
-    //         }
-
-    //         // Determine which index to use and how to filter
-    //         if (indexKey && filterFields) {
-    //             // Custom index and filter fields specified
-    //             if (watchedValues.length === 1) {
-    //                 // Single field filter
-    //                 return await db.villages
-    //                     .where(indexKey)
-    //                     .equals(watchedValues[0])
-    //                     .sortBy(sortField);
-    //             } else {
-    //                 // Compound index filter
-    //                 return await db.villages
-    //                     .where(indexKey)
-    //                     .equals(watchedValues)
-    //                     .sortBy(sortField);
-    //             }
-    //         } else {
-    //             // Auto-detect index based on number of watched fields
-    //             if (watchedValues.length === 1) {
-    //                 // Single field - use District index
-    //                 return await db.villages
-    //                     .where("District")
-    //                     .equals(watchedValues[0])
-    //                     .sortBy(sortField);
-    //             } else if (watchedValues.length === 2) {
-    //                 // Two fields - use [District+subcounty_name] index
-    //                 return await db.villages
-    //                     .where("[District+subcounty_name]")
-    //                     .equals(watchedValues)
-    //                     .sortBy(sortField);
-    //             } else if (watchedValues.length === 3) {
-    //                 // Three fields - use [District+subcounty_name+parish_name] index
-    //                 return await db.villages
-    //                     .where("[District+subcounty_name+parish_name]")
-    //                     .equals(watchedValues)
-    //                     .sortBy(sortField);
-    //             } else {
-    //                 // More than 3 fields - filter manually
-    //                 let results = await db.villages.toArray();
-
-    //                 watchedValues.forEach((val, idx) => {
-    //                     if (filterFields && filterFields[idx]) {
-    //                         const field = filterFields[
-    //                             idx
-    //                         ] as keyof (typeof results)[0];
-    //                         results = results.filter((v) => v[field] === val);
-    //                     }
-    //                 });
-
-    //                 return results.sort((a, b) => {
-    //                     const aVal = a[sortField as keyof typeof a];
-    //                     const bVal = b[sortField as keyof typeof b];
-    //                     return String(aVal).localeCompare(String(bVal));
-    //                 });
-    //             }
-    //         }
-    //     },
-    //     [watchedValues.join("|"), indexKey, sortField],
-    //     [],
-    // );
-
-    // Clear village when parent fields change
-    // useEffect(() => {
-    //     if (value && villages && villages.length > 0) {
-    //         // Check if current value is still valid
-    //         const isValid = villages.some(
-    //             (v) => v[valueField  === value,
-    //         );
-    //         if (!isValid) {
-    //             onChange?.("");
-    //         }
-    //     }
-    // }, [watchedValues.join("|"), villages, value, onChange, valueField]);
-
-    // Generate placeholder message
     const getPlaceholder = () => {
-        // const emptyFields = watchFields.filter(
-        //     (_, idx) => !watchedValues[idx] || watchedValues[idx] === "",
-        // );
-
-        // if (emptyFields.length > 0) {
-        //     const fieldNames = emptyFields.map((f) => f.label).join(", ");
-        //     return `Select ${fieldNames} first`;
-        // }
-
-        // if (villages?.length === 0) {
-        //     return "No villages found";
-        // }
-
         return "Select Village";
     };
 
@@ -295,12 +156,6 @@ export default function VillageSelect({
         }
     };
 
-    // const isDisabled =
-    //     !allowDirectSearch &&
-    //     (watchedValues.some((val) => !val || val === "") ||
-    //         isLoading ||
-    //         villages?.length === 0);
-
     return (
         <Select
             placeholder={getPlaceholder()}
@@ -321,15 +176,14 @@ export default function VillageSelect({
                         .join("/"),
                 };
             })}
-            showSearch
+            showSearch={{
+                filterOption: (input, option) =>
+                    (option?.label ?? "")
+                        .toLowerCase()
+                        .includes(input.toLowerCase()),
+            }}
             virtual
             style={{ width: "100%" }}
-            loading={isLoading}
-            filterOption={(input, option) =>
-                (option?.label ?? "")
-                    .toLowerCase()
-                    .includes(input.toLowerCase())
-            }
         />
     );
 }

@@ -72,6 +72,10 @@ export const ProgramStageCapture: React.FC<{
     const ruleResult = TrackerContext.useSelector(
         (state) => state.context.currentEventRuleResults,
     );
+
+    const trackedEntity = TrackerContext.useSelector(
+        (state) => state.context.trackedEntity,
+    );
     // Convert currentEvent dataValues to Ant Design fields format for controlled form
     // const fields = useMemo(
     //     () =>
@@ -95,7 +99,7 @@ export const ProgramStageCapture: React.FC<{
     const showVisitModal = (
         visit: ReturnType<typeof flattenTrackedEntity>["events"][number],
     ) => {
-        // trackerActor.send({ type: "SET_CURRENT_EVENT", currentEvent: visit });
+        trackerActor.send({ type: "SET_CURRENT_EVENT", currentEvent: visit });
         setModalKey((prev) => prev + 1);
         setIsVisitModalOpen(true);
     };
@@ -108,7 +112,6 @@ export const ProgramStageCapture: React.FC<{
             enrollment: enrollment.enrollment,
             orgUnit: enrollment.orgUnit,
             programStage: programStage.id,
-						
         });
 
         trackerActor.send({
@@ -138,6 +141,7 @@ export const ProgramStageCapture: React.FC<{
         {
             title: "Action",
             key: "action",
+						width: 100,
             render: (_, record) => (
                 <Button
                     icon={<EyeOutlined />}
@@ -151,20 +155,23 @@ export const ProgramStageCapture: React.FC<{
         },
     ];
 
-    const handleValuesChange = useCallback((_changed: any, allValues: any) => {
-        trackerActor.send({
-            type: "EXECUTE_PROGRAM_RULES",
-            dataValues: allValues,
-            programStage: programStage.id,
-            programRules,
-            programRuleVariables,
-        });
-        trackerActor.send({
-            type: "UPDATE_DATA_WITH_ASSIGNMENTS",
-        });
-    }, []);
+    const handleValuesChange = useCallback(
+        (_changed: any, allValues: any) => {
+            trackerActor.send({
+                type: "EXECUTE_PROGRAM_RULES",
+                dataValues: allValues,
+                attributeValues: trackedEntity.attributes, // Include attributes for rules that reference them
+                programStage: programStage.id,
+                programRules,
+                programRuleVariables,
+            });
+            trackerActor.send({
+                type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+            });
+        },
+        [trackedEntity.attributes],
+    );
 
-    // Initialize form with event data values when modal opens
     useEffect(() => {
         if (isVisitModalOpen) {
             stageForm.resetFields();
@@ -175,6 +182,7 @@ export const ProgramStageCapture: React.FC<{
                 trackerActor.send({
                     type: "EXECUTE_PROGRAM_RULES",
                     dataValues: currentEvent.dataValues,
+                    attributeValues: trackedEntity.attributes, // Include attributes for rules that reference them
                     programStage: programStage.id,
                     programRules,
                     programRuleVariables,
@@ -188,6 +196,15 @@ export const ProgramStageCapture: React.FC<{
             }
         }
     }, [isVisitModalOpen, currentEvent.event, trackerActor, stageForm]);
+
+    useEffect(() => {
+        if (
+            isVisitModalOpen &&
+            Object.keys(ruleResult.assignments).length > 0
+        ) {
+            stageForm.setFieldsValue(ruleResult.assignments);
+        }
+    }, [ruleResult.assignments, isVisitModalOpen, stageForm]);
 
     const onStageSubmit = (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
@@ -239,48 +256,62 @@ export const ProgramStageCapture: React.FC<{
     };
 
     return (
-        <Flex style={{ width: "100%" }}>
-            <Card
-                title={
-                    <Flex align="center" gap="small">
-                        <ExperimentOutlined
-                            style={{ fontSize: 15, color: "#7c3aed" }}
-                        />
-                        <Text strong style={{ fontSize: 14 }}>
-                            {programStage.name}
-                        </Text>
-                    </Flex>
-                }
-                extra={
-                    <Button
-                        type="primary"
-                        icon={<PlusOutlined />}
-                        onClick={showCreateVisitModal}
-                        size="middle"
-                        style={{
-                            background: "#7c3aed",
-                            borderColor: "#7c3aed",
-                            borderRadius: 6,
-                        }}
-                    >
-                        Add {programStage.name}
-                    </Button>
-                }
-                styles={{
-                    body: {
-                        padding: 10,
-                        margin: 0,
-                    },
+        <Flex
+            style={{
+                backgroundColor: "#ffffff",
+                width: "100%",
+                padding: "16px",
+            }}
+            vertical
+        >
+            <Table
+                columns={columns}
+                dataSource={events}
+                pagination={false}
+                rowKey="event"
+                scroll={{ x: "max-content" }}
+                title={() => {
+                    return (
+                        <Flex
+                            style={{
+                                width: "100%",
+                            }}
+                            justify="space-between"
+                            align="center"
+                        >
+                            <Flex align="center" gap="small">
+                                <ExperimentOutlined
+                                    style={{
+                                        fontSize: 28,
+                                        color: "#7c3aed",
+                                    }}
+                                />
+                                <Text
+                                    strong
+                                    style={{
+                                        fontSize: 14,
+                                    }}
+                                >
+                                    {programStage.name}
+                                </Text>
+                            </Flex>
+                            <Button
+                                type="primary"
+                                icon={<PlusOutlined />}
+                                onClick={showCreateVisitModal}
+                                size="middle"
+                                style={{
+                                    background: "#7c3aed",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 6,
+                                }}
+                            >
+                                Add {programStage.name}
+                            </Button>
+                        </Flex>
+                    );
                 }}
-                style={{ width: "100%" }}
-            >
-                <Table
-                    columns={columns}
-                    dataSource={events}
-                    pagination={{ pageSize: 10 }}
-                    rowKey="event"
-                />
-            </Card>
+            />
             <Modal
                 key={modalKey}
                 open={isVisitModalOpen}
@@ -363,6 +394,7 @@ export const ProgramStageCapture: React.FC<{
                     onFinish={onStageSubmit}
                     onValuesChange={handleValuesChange}
                     style={{ margin: 0, padding: 0 }}
+                    initialValues={currentEvent.dataValues}
                 >
                     <Flex vertical>
                         {programStage.programStageSections.flatMap(

@@ -1,20 +1,16 @@
 import Dexie, { Table } from "dexie";
 import {
+    DataElement,
+    Node,
+    Program,
+    ProgramRule,
+    ProgramRuleVariable,
+    TrackedEntityAttribute,
+} from "../schemas";
+import {
     flattenTrackedEntity,
     flattenTrackedEntityResponse,
 } from "../utils/utils";
-import {
-    DataElement,
-    FAttribute,
-    FDataElement,
-    ProgramRule,
-    ProgramRuleVariable,
-    ProgramStage,
-    ProgramTrackedEntityAttribute,
-    Node,
-    TrackedEntityAttribute,
-    Program,
-} from "../schemas";
 
 /**
  * Database Schema for MOH Registers Application
@@ -168,7 +164,8 @@ export class RegisterDatabase extends Dexie {
             programs: "id,name,programType",
             // Villages table with compound indexes for hierarchical queries
             // Allows fast filtering: District -> Subcounty -> Parish -> Village
-            villages: "village_id,village_name,District,[District+subcounty_name],[District+subcounty_name+parish_name]",
+            villages:
+                "village_id,village_name,District,[District+subcounty_name],[District+subcounty_name+parish_name]",
         });
     }
 

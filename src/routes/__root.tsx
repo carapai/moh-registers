@@ -4,13 +4,14 @@ import { createRootRouteWithContext, Outlet } from "@tanstack/react-router";
 import React, { useMemo } from "react";
 
 import { Flex } from "antd";
+import useApp from "antd/es/app/useApp";
+import { groupBy } from "lodash";
 import { AppHeader } from "../components/app-header";
 import { SyncErrorBoundary } from "../components/sync-error-boundary";
 import { db } from "../db";
 import { createSyncManager } from "../db/sync";
 import { TrackerContext } from "../machines/tracker";
 import { resourceQueryOptions } from "../query-options";
-import { loadVillagesIfNeeded } from "../utils/village-loader";
 import {
     DataElement,
     Program,
@@ -18,7 +19,6 @@ import {
     ProgramRuleVariable,
     TrackedEntityAttribute,
 } from "../schemas";
-import { groupBy } from "lodash";
 
 export const RootRoute = createRootRouteWithContext<{
     queryClient: QueryClient;
@@ -44,7 +44,6 @@ export const RootRoute = createRootRouteWithContext<{
                 },
             }),
         );
-        await loadVillagesIfNeeded();
         const prevDataElements = await db.dataElements.count();
         const prevAttributes = await db.trackedEntityAttributes.count();
         const prevProgramRules = await db.programRules.count();
@@ -52,6 +51,8 @@ export const RootRoute = createRootRouteWithContext<{
         const prevOptionGroups = await db.optionGroups.count();
         const prevOptionSets = await db.optionSets.count();
         const prevPrograms = await db.programs.count();
+        const prevVillages = await db.villages.count();
+
         if (
             prevDataElements === 0 ||
             prevAttributes === 0 ||
@@ -59,8 +60,16 @@ export const RootRoute = createRootRouteWithContext<{
             prevProgramRuleVariables === 0 ||
             prevOptionGroups === 0 ||
             prevOptionSets === 0 ||
-            prevPrograms === 0
+            prevPrograms === 0 ||
+            prevVillages === 0
         ) {
+            const villages = await queryClient.ensureQueryData(
+                resourceQueryOptions<any>({
+                    engine,
+                    resource: "dataStore/registers",
+                    id: "villages",
+                }),
+            );
             const program = await queryClient.ensureQueryData(
                 resourceQueryOptions<Program>({
                     engine,
@@ -173,6 +182,7 @@ export const RootRoute = createRootRouteWithContext<{
             await db.programRuleVariables.bulkPut(programRuleVariables);
             await db.optionGroups.bulkPut(finalOptionGroups);
             await db.optionSets.bulkPut(finalOptionSets);
+            await db.villages.bulkPut(villages);
             return {
                 ...me,
                 dataElements: new Map(dataElements.map((de) => [de.id, de])),
@@ -192,6 +202,7 @@ export const RootRoute = createRootRouteWithContext<{
                     ),
                 ),
                 program,
+                villages,
             };
         }
 
@@ -203,6 +214,7 @@ export const RootRoute = createRootRouteWithContext<{
         const optionGroups = await db.optionGroups.toArray();
         const optionSets = await db.optionSets.toArray();
         const programs = await db.programs.toArray();
+        const villages = await db.villages.toArray();
 
         return {
             ...me,
@@ -223,52 +235,22 @@ export const RootRoute = createRootRouteWithContext<{
                 ),
             ),
             program: programs[0],
+            villages,
         };
     },
 });
 
 function RootRouteComponent() {
     const { engine } = RootRoute.useRouteContext();
+    const { message } = useApp();
     const navigate = RootRoute.useNavigate();
-    const {
-        organisationUnits,
-        trackedEntityAttributes,
-        programRules,
-        programRuleVariables,
-        optionGroups,
-        optionSets,
-        dataElements,
-    } = RootRoute.useLoaderData();
+    const { organisationUnits } = RootRoute.useLoaderData();
     // Initialize sync manager (memoized to prevent recreation on re-renders)
     const syncManager = useMemo(() => {
-        console.log("🔧 Initializing Sync Manager...");
         const manager = createSyncManager(engine);
-        // Start auto-sync every 30 seconds
         manager.startAutoSync(3000);
-
         return manager;
     }, [engine]);
-
-    // Initialize database and cleanup on unmount
-    // useEffect(() => {
-    //     console.log("📦 Initializing IndexedDB database...");
-
-    // Database is automatically initialized when imported
-    // Check if it's accessible
-    //     db.open()
-    //         .then(() => {
-    //             console.log("✅ Database initialized successfully");
-    //         })
-    //         .catch((error) => {
-    //             console.error("❌ Database initialization failed:", error);
-    //         });
-
-    //     // Cleanup on unmount
-    //     return () => {
-    //         console.log("🧹 Cleaning up Sync Manager...");
-    //         syncManager.stopAutoSync();
-    //     };
-    // }, [syncManager]);
 
     return (
         <SyncErrorBoundary
@@ -285,6 +267,7 @@ function RootRouteComponent() {
                         navigate,
                         organisationUnits,
                         syncManager,
+                        message,
                     },
                 }}
             >

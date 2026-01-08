@@ -7,7 +7,7 @@ import {
     UserAddOutlined,
 } from "@ant-design/icons";
 import { createRoute } from "@tanstack/react-router";
-import type { DescriptionsProps, SelectProps, TableProps } from "antd";
+import type { DescriptionsProps, TableProps } from "antd";
 import {
     Button,
     Card,
@@ -33,7 +33,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { DataElementField } from "../components/data-element-field";
 import { ProgramStageCapture } from "../components/program-stage-capture";
 import { FlattenedEvent } from "../db";
-import { useAutoSave } from "../hooks/useAutoSave";
 import { useTrackerState } from "../hooks/useTrackerState";
 import { TrackerContext } from "../machines/tracker";
 import {
@@ -44,8 +43,6 @@ import {
     flattenTrackedEntity,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
-import { OptionSet } from "../schemas";
-import { generateUid } from "../utils/id";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -65,8 +62,10 @@ function TrackedEntity() {
         programRuleVariables,
     } = RootRoute.useLoaderData();
     const trackerActor = TrackerContext.useActorRef();
-    const serviceTypes: SelectProps<OptionSet["options"]>["options"] =
-        optionSets.get("QwsvSPpnRul") ?? [];
+    const [serviceTypes, setServiceTypes] = useState<
+        Array<{ id: string; name: string; code: string; optionSet: string }>
+    >(optionSets.get("QwsvSPpnRul") ?? []);
+
     const { enrollment, events, mainEvent, ruleResult } =
         useTrackerState("K2nxbE9ubSs");
 
@@ -79,13 +78,12 @@ function TrackedEntity() {
         ]),
     );
 
-    const machineState = TrackerContext.useSelector((state) => state.value);
     const trackedEntity = TrackerContext.useSelector(
         (state) => state.context.trackedEntity,
     );
 
     const dataElementToAttributeMap: Record<string, string> = {
-        // KJ2V2JlOxFi: "Y3DE5CZWySr",
+        KJ2V2JlOxFi: "Y3DE5CZWySr",
     };
 
     // Configuration: Attributes to auto-populate from parent tracked entity
@@ -132,22 +130,23 @@ function TrackedEntity() {
     const [isNestedModalOpen, setIsNestedModalOpen] = useState(false);
     const [nestedModalKey, setNestedModalKey] = useState(0);
     const [nestedForm] = Form.useForm();
-    const { clearDraft } = useAutoSave({
-        form: visitForm,
-        draftId: mainEvent.event,
-        type: "event",
-        interval: 30000,
-        enabled: isVisitModalOpen,
-        metadata: {
-            trackedEntity: enrollment.trackedEntity,
-            programStage: "K2nxbE9ubSs",
-            enrollment: enrollment.enrollment,
-            orgUnit: enrollment.orgUnit,
-            program: enrollment.program,
-            isNew: !mainEvent.event || mainEvent.event.startsWith("temp"),
-        },
-        onSave: () => console.log("💾 Visit draft auto-saved"),
-    });
+    // const [isUpdatingFromRules, setIsUpdatingFromRules] = useState(false);
+    // const { clearDraft } = useAutoSave({
+    //     form: visitForm,
+    //     draftId: mainEvent.event,
+    //     type: "event",
+    //     interval: 30000,
+    //     enabled: isVisitModalOpen,
+    //     metadata: {
+    //         trackedEntity: enrollment.trackedEntity,
+    //         programStage: "K2nxbE9ubSs",
+    //         enrollment: enrollment.enrollment,
+    //         orgUnit: enrollment.orgUnit,
+    //         program: enrollment.program,
+    //         isNew: !mainEvent.event || mainEvent.event.startsWith("temp"),
+    //     },
+    //     onSave: () => console.log("💾 Visit draft auto-saved"),
+    // });
     const onVisitSubmit = (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
             console.error(
@@ -185,7 +184,7 @@ function TrackedEntity() {
                 duration: 3,
             });
             // Clear draft after successful submission
-            clearDraft();
+            // clearDraft();
             visitForm.resetFields();
             trackerActor.send({ type: "RESET_MAIN_EVENT" });
             setIsVisitModalOpen(false);
@@ -389,27 +388,25 @@ function TrackedEntity() {
         ],
         [], // Empty deps - columns don't depend on state
     );
-
     const items: DescriptionsProps["items"] = Object.entries(
-        attributes || {},
+        trackedEntity.attributes || {},
     ).map(([key, value]) => ({
+        key: key,
         label: keys.get(key) || key,
         children: <Text>{String(value)}</Text>,
     }));
 
     const handleValuesChange = (_changed: any, allValues: any) => {
-        // Check if REWqohCg4Km changed to "yes"
         if (_changed && _changed["REWqohCg4Km"] === "Yes") {
             openNestedModal();
         }
-
         trackerActor.send({
             type: "EXECUTE_PROGRAM_RULES",
             dataValues: allValues,
             programRules,
             programRuleVariables,
             programStage: mainEvent.programStage,
-            // attributeValues: trackedEntity.attributes,
+            attributeValues: trackedEntity.attributes,
         });
         trackerActor.send({
             type: "UPDATE_DATA_WITH_ASSIGNMENTS",
@@ -424,7 +421,7 @@ function TrackedEntity() {
                 programRuleVariables: programRuleVariables,
                 programStage: mainEvent.programStage,
                 dataValues: mainEvent.dataValues,
-								// attributeValues: trackedEntity.attributes,
+                attributeValues: trackedEntity.attributes,
             });
             trackerActor.send({
                 type: "UPDATE_DATA_WITH_ASSIGNMENTS",
@@ -433,30 +430,47 @@ function TrackedEntity() {
     }, [isVisitModalOpen]);
 
     // Initialize form with event data values when modal opens
+    // useEffect(() => {
+    //     if (isVisitModalOpen && mainEvent) {
+    //         visitForm.resetFields();
+    //         visitForm.setFieldsValue();
+    //     }
+    // }, [isVisitModalOpen, mainEvent.event, visitForm]);
+
+    // Apply program rule assignments to form fields automatically
     useEffect(() => {
-        if (isVisitModalOpen && mainEvent) {
-            visitForm.resetFields();
-            visitForm.setFieldsValue({
-                ...mainEvent.dataValues,
-                occurredAt: mainEvent.occurredAt,
-            });
+        if (
+            isVisitModalOpen &&
+            Object.keys(ruleResult.assignments).length > 0
+        ) {
+            visitForm.setFieldsValue(ruleResult.assignments);
         }
-    }, [isVisitModalOpen, mainEvent.event, visitForm]);
+        if (isVisitModalOpen && ruleResult.hiddenOptions["QwsvSPpnRul"]) {
+            setServiceTypes((prev) =>
+                prev.flatMap((o) => {
+                    if (ruleResult.hiddenOptions["QwsvSPpnRul"].has(o.id)) {
+                        return [];
+                    }
+                    return o;
+                }),
+            );
+        }
+    }, [ruleResult, isVisitModalOpen, visitForm]);
 
     // Listen for state machine transitions and show appropriate messages
-    useEffect(() => {
-        if (machineState === "entitySuccess") {
-            message.success({
-                content: "Patient registered successfully!",
-                duration: 3,
-            });
-        } else if (machineState === "failure") {
-            message.error({
-                content: "Failed to save patient. Please try again.",
-                duration: 5,
-            });
-        }
-    }, [machineState]);
+    // useEffect(() => {
+    //     if (machineState === "entitySuccess") {
+    //         message.success({
+    //             content: "Patient registered successfully!",
+    //             duration: 3,
+    //         });
+    //     } else if (machineState === "failure") {
+    //         message.error({
+    //             content: "Failed to save patient. Please try again.",
+    //             duration: 5,
+    //         });
+    //     }
+    // }, [machineState]);
 
     return (
         <>
@@ -678,7 +692,7 @@ function TrackedEntity() {
                 width="95vw"
                 styles={{
                     body: {
-                        height: "75vh",
+                        maxHeight: "75vh",
                         margin: 0,
                         padding: 0,
                     },
@@ -699,15 +713,11 @@ function TrackedEntity() {
                         occurredAt: mainEvent.occurredAt,
                     }}
                 >
-                    <Flex vertical gap={10}>
+                    <Flex vertical gap={10} style={{ width: "100%" }}>
                         {/* Visit Basic Info Card */}
                         <Card
-                            style={{
-                                // marginBottom: 20,
-                                borderRadius: 0,
-                                // boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
-                            }}
-                            // styles={{ body: { padding: "20px 24px" } }}
+                            size="small"
+                            styles={{ body: { padding: 10, margin: 0 } }}
                         >
                             <Row gutter={20}>
                                 <Col span={12}>
@@ -841,155 +851,166 @@ function TrackedEntity() {
                                                     section.displayName ||
                                                     section.name,
                                                 children: (
-                                                    <Row gutter={24}>
-                                                        {section.dataElements.flatMap(
-                                                            (dataElement) => {
-                                                                const currentDataElement =
-                                                                    dataElements.get(
-                                                                        dataElement.id,
-                                                                    );
-                                                                const {
-                                                                    compulsory = false,
-                                                                    vertical = false,
-                                                                    renderOptionsAsRadio = false,
-                                                                } = currentDataElements.get(
-                                                                    dataElement.id,
-                                                                ) || {};
-
-                                                                const optionSet =
-                                                                    currentDataElement
-                                                                        ?.optionSet
-                                                                        ?.id ??
-                                                                    "";
-
-                                                                const hiddenOptions =
-                                                                    ruleResult
-                                                                        .hiddenOptions[
-                                                                        dataElement
-                                                                            .id
-                                                                    ];
-
-                                                                const shownOptionGroups =
-                                                                    ruleResult
-                                                                        .shownOptionGroups[
-                                                                        dataElement
-                                                                            .id
-                                                                    ] ||
-                                                                    new Set<string>();
-
-                                                                let finalOptions =
-                                                                    optionSets
-                                                                        .get(
-                                                                            optionSet,
-                                                                        )
-                                                                        ?.flatMap(
-                                                                            (
-                                                                                o,
-                                                                            ) => {
-                                                                                if (
-                                                                                    hiddenOptions?.has(
-                                                                                        o.id,
-                                                                                    )
-                                                                                ) {
-                                                                                    return [];
-                                                                                }
-                                                                                return o;
-                                                                            },
+                                                    <Card>
+                                                        <Row gutter={24}>
+                                                            {section.dataElements.flatMap(
+                                                                (
+                                                                    dataElement,
+                                                                ) => {
+                                                                    const currentDataElement =
+                                                                        dataElements.get(
+                                                                            dataElement.id,
                                                                         );
-
-                                                                if (
-                                                                    ruleResult.hiddenFields.has(
+                                                                    const {
+                                                                        compulsory = false,
+                                                                        vertical = false,
+                                                                        renderOptionsAsRadio = false,
+                                                                    } = currentDataElements.get(
                                                                         dataElement.id,
-                                                                    )
-                                                                ) {
-                                                                    return [];
-                                                                }
+                                                                    ) || {};
 
-                                                                if (
-                                                                    shownOptionGroups.size >
-                                                                    0
-                                                                ) {
-                                                                    const currentOptions =
-                                                                        optionGroups.get(
-                                                                            shownOptionGroups
-                                                                                .values()
-                                                                                .next()
-                                                                                .value,
-                                                                        ) ?? [];
-                                                                    finalOptions =
-                                                                        currentOptions.map(
-                                                                            ({
-                                                                                code,
-                                                                                id,
-                                                                                name,
-                                                                            }) => ({
-                                                                                id,
-                                                                                code,
-                                                                                name,
+                                                                    const optionSet =
+                                                                        currentDataElement
+                                                                            ?.optionSet
+                                                                            ?.id ??
+                                                                        "";
+
+                                                                    const hiddenOptions =
+                                                                        ruleResult
+                                                                            .hiddenOptions[
+                                                                            dataElement
+                                                                                .id
+                                                                        ];
+
+                                                                    const shownOptionGroups =
+                                                                        ruleResult
+                                                                            .shownOptionGroups[
+                                                                            dataElement
+                                                                                .id
+                                                                        ] ||
+                                                                        new Set<string>();
+
+                                                                    let finalOptions =
+                                                                        optionSets
+                                                                            .get(
                                                                                 optionSet,
-                                                                            }),
+                                                                            )
+                                                                            ?.flatMap(
+                                                                                (
+                                                                                    o,
+                                                                                ) => {
+                                                                                    if (
+                                                                                        hiddenOptions?.has(
+                                                                                            o.id,
+                                                                                        )
+                                                                                    ) {
+                                                                                        return [];
+                                                                                    }
+                                                                                    return o;
+                                                                                },
+                                                                            );
+
+                                                                    if (
+                                                                        ruleResult.hiddenFields.has(
+                                                                            dataElement.id,
+                                                                        )
+                                                                    ) {
+                                                                        return [];
+                                                                    }
+
+                                                                    if (
+                                                                        shownOptionGroups.size >
+                                                                        0
+                                                                    ) {
+                                                                        const currentOptions =
+                                                                            optionGroups.get(
+                                                                                shownOptionGroups
+                                                                                    .values()
+                                                                                    .next()
+                                                                                    .value,
+                                                                            ) ??
+                                                                            [];
+                                                                        finalOptions =
+                                                                            currentOptions.map(
+                                                                                ({
+                                                                                    code,
+                                                                                    id,
+                                                                                    name,
+                                                                                }) => ({
+                                                                                    id,
+                                                                                    code,
+                                                                                    name,
+                                                                                    optionSet,
+                                                                                }),
+                                                                            );
+                                                                    }
+
+                                                                    const errors =
+                                                                        ruleResult.errors.filter(
+                                                                            (
+                                                                                msg,
+                                                                            ) =>
+                                                                                msg.key ===
+                                                                                dataElement.id,
                                                                         );
-                                                                }
+                                                                    const messages =
+                                                                        ruleResult.messages.filter(
+                                                                            (
+                                                                                msg,
+                                                                            ) =>
+                                                                                msg.key ===
+                                                                                dataElement.id,
+                                                                        );
+                                                                    const warnings =
+                                                                        ruleResult.warnings.filter(
+                                                                            (
+                                                                                msg,
+                                                                            ) =>
+                                                                                msg.key ===
+                                                                                dataElement.id,
+                                                                        );
 
-                                                                const errors =
-                                                                    ruleResult.errors.filter(
-                                                                        (msg) =>
-                                                                            msg.key ===
-                                                                            dataElement.id,
+                                                                    return (
+                                                                        <DataElementField
+                                                                            dataElement={
+                                                                                currentDataElement!
+                                                                            }
+                                                                            hidden={
+                                                                                false
+                                                                            }
+                                                                            renderOptionsAsRadio={
+                                                                                renderOptionsAsRadio
+                                                                            }
+                                                                            vertical={
+                                                                                vertical
+                                                                            }
+                                                                            finalOptions={
+                                                                                finalOptions
+                                                                            }
+                                                                            messages={
+                                                                                messages
+                                                                            }
+                                                                            warnings={
+                                                                                warnings
+                                                                            }
+                                                                            errors={
+                                                                                errors
+                                                                            }
+                                                                            required={
+                                                                                compulsory
+                                                                            }
+                                                                            key={
+                                                                                dataElement.id
+                                                                            }
+                                                                            form={
+                                                                                visitForm
+                                                                            }
+                                                                        />
                                                                     );
-                                                                const messages =
-                                                                    ruleResult.messages.filter(
-                                                                        (msg) =>
-                                                                            msg.key ===
-                                                                            dataElement.id,
-                                                                    );
-                                                                const warnings =
-                                                                    ruleResult.warnings.filter(
-                                                                        (msg) =>
-                                                                            msg.key ===
-                                                                            dataElement.id,
-                                                                    );
-
-                                                                return (
-                                                                    <DataElementField
-                                                                        dataElement={
-                                                                            currentDataElement!
-                                                                        }
-                                                                        hidden={
-                                                                            false
-                                                                        }
-                                                                        renderOptionsAsRadio={
-                                                                            renderOptionsAsRadio
-                                                                        }
-                                                                        vertical={
-                                                                            vertical
-                                                                        }
-                                                                        finalOptions={
-                                                                            finalOptions
-                                                                        }
-                                                                        messages={
-                                                                            messages
-                                                                        }
-                                                                        warnings={
-                                                                            warnings
-                                                                        }
-                                                                        errors={
-                                                                            errors
-                                                                        }
-                                                                        required={
-                                                                            compulsory
-                                                                        }
-                                                                        key={
-                                                                            dataElement.id
-                                                                        }
-                                                                        form={
-                                                                            visitForm
-                                                                        }
-                                                                    />
-                                                                );
-                                                            },
-                                                        )}
-                                                    </Row>
+                                                                },
+                                                            )}
+                                                        </Row>
+                                                    </Card>
                                                 ),
                                             },
                                         ];
@@ -999,22 +1020,18 @@ function TrackedEntity() {
                             tabBarStyle={{
                                 background: "#fff",
                                 borderRadius: 0,
-                                padding: "12px 8px",
-                                boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
                             }}
                             styles={{
                                 content: {
-                                    height: "63vh",
+                                    maxHeight: "63vh",
                                     overflow: "auto",
-                                    padding: "24px 24px",
+                                    padding: 0,
                                     margin: 0,
-                                    background: "#fff",
                                     borderRadius: 0,
-                                    boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
                                     marginLeft: 8,
                                 },
                                 header: {
-                                    height: "63vh",
+                                    maxHeight: "63vh",
                                     overflow: "auto",
                                 },
                             }}
@@ -1022,8 +1039,6 @@ function TrackedEntity() {
                     </Flex>
                 </Form>
             </Modal>
-
-            {/* Nested Modal for Patient Registration */}
             <Modal
                 key={nestedModalKey}
                 open={isNestedModalOpen}

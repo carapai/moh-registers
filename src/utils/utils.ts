@@ -2,9 +2,6 @@ import { FormItemProps, TableProps } from "antd";
 import dayjs from "dayjs";
 import { isEmpty } from "lodash";
 import {
-    FAttribute,
-    FDataElement,
-    Program,
     ProgramRule,
     ProgramRuleResult,
     ProgramRuleVariable,
@@ -109,8 +106,14 @@ export function executeProgramRules({
     programStage?: string;
     program?: string;
 }): ProgramRuleResult {
-    console.log("🚀 Executing Program Rules:", attributeValues);
     const variableValues: Record<string, any> = {};
+
+    // Add system variables
+    variableValues["current_date"] = dayjs().format("YYYY-MM-DD");
+    variableValues["event_date"] =
+        dataValues?.occurredAt || dayjs().format("YYYY-MM-DD");
+    variableValues["event_count"] = 1; // Could be calculated from events array if available
+
     for (const variable of programRuleVariables) {
         let value: any = null;
         // Check for data element
@@ -123,11 +126,16 @@ export function executeProgramRules({
         // Check for tracked entity attribute
         else if (
             variable.trackedEntityAttribute &&
-            attributeValues.hasOwnProperty(variable.trackedEntityAttribute.id)
+            attributeValues?.hasOwnProperty(variable.trackedEntityAttribute.id)
         ) {
             value = attributeValues[variable.trackedEntityAttribute.id];
         }
 
+        if (value !== null && value !== undefined) {
+            console.log(
+                `  📌 Variable "${variable.name}" = ${value} (from ${variable.dataElement ? "dataElement" : "attribute"}: ${variable.dataElement?.id || variable.trackedEntityAttribute?.id})`,
+            );
+        }
         variableValues[variable.name] = value ?? null;
     }
 
@@ -244,8 +252,13 @@ export function executeProgramRules({
             return Math.ceil(Number(value));
         },
 
-        round: (value: number): number => {
-            return Math.round(Number(value));
+        round: (value: number, decimals?: number): number => {
+            const num = Number(value);
+            if (decimals === undefined || decimals === 0) {
+                return Math.round(num);
+            }
+            const multiplier = Math.pow(10, decimals);
+            return Math.round(num * multiplier) / multiplier;
         },
 
         modulus: (dividend: number, divisor: number): number => {
@@ -311,10 +324,13 @@ export function executeProgramRules({
     };
 
     // Helper function to get and format variable/attribute value
-    const getFormattedValue = (name: string): string => {
+    const getFormattedValue = (
+        name: string,
+        skipQuotes: boolean = false,
+    ): string => {
         const val = variableValues[name];
         if (val === null || val === undefined) {
-            return "''";
+            return skipQuotes ? "" : "''";
         }
         if (typeof val === "boolean") {
             return String(val);
@@ -323,62 +339,274 @@ export function executeProgramRules({
             return String(val);
         }
         const stringVal = String(val);
+        if (skipQuotes) {
+            return stringVal;
+        }
         const escaped = stringVal.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         return `'${escaped}'`;
+    };
+
+    // Helper to find matching closing parenthesis
+    const findClosingParen = (str: string, startPos: number): number => {
+        let depth = 1;
+        for (let i = startPos; i < str.length; i++) {
+            if (str[i] === "(") depth++;
+            else if (str[i] === ")") {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    };
+
+    // Helper to evaluate expressions (for ASSIGN and other actions)
+    const evaluateExpression = (expression: string): any => {
+        if (!expression) return null;
+
+        // First replace d2: function calls with JavaScript function calls
+        let processedExpression = expression;
+
+        // Replace d2:functionName(...) with d2Functions.functionName(...)
+        // Process from innermost to outermost by repeatedly replacing
+        let maxIterations = 10; // Prevent infinite loops
+        while (processedExpression.includes("d2:") && maxIterations-- > 0) {
+            // Find the first d2: function call
+            const d2Match = processedExpression.match(/d2:(\w+)\s*\(/);
+            if (!d2Match) break;
+
+            const funcName = d2Match[1];
+            const startPos = d2Match.index!;
+            const openParenPos = startPos + d2Match[0].length - 1;
+            const closeParenPos = findClosingParen(
+                processedExpression,
+                openParenPos + 1,
+            );
+
+            if (closeParenPos === -1) {
+                console.warn(
+                    "Could not find closing parenthesis for",
+                    d2Match[0],
+                );
+                break;
+            }
+
+            // Extract the full function call including d2: prefix
+            const fullMatch = processedExpression.substring(
+                startPos,
+                closeParenPos + 1,
+            );
+            const argsStr = processedExpression.substring(
+                openParenPos + 1,
+                closeParenPos,
+            );
+
+            // Split args carefully (simple comma split works for most cases)
+            const args = argsStr.split(",");
+
+            const processedArgs = args
+                .map((arg: string) => {
+                    arg = arg.trim();
+
+                    // Functions that need variable name instead of value
+                    const needsVarName = [
+                        "hasValue",
+                        "count",
+                        "countIfValue",
+                        "countIfZeroPos",
+                    ].includes(funcName);
+
+                    // Handle variable references #{varName} or A{attributeName} or V{systemVar}
+                    const varMatch = arg.match(/^[#AV]\{([^}]+)\}$/);
+                    if (varMatch) {
+                        const varName = varMatch[1];
+                        if (needsVarName) {
+                            return `'${varName}'`;
+                        } else {
+                            // Get the raw value and wrap it properly
+                            const val = variableValues[varName];
+                            if (val === null || val === undefined)
+                                return "null";
+                            if (typeof val === "number") return String(val);
+                            if (typeof val === "boolean") return String(val);
+                            // For strings, escape and quote
+                            const stringVal = String(val);
+                            const escaped = stringVal
+                                .replace(/\\/g, "\\\\")
+                                .replace(/'/g, "\\'");
+                            return `'${escaped}'`;
+                        }
+                    }
+
+                    // If it's already quoted, keep as is
+                    if (arg.match(/^['"].*['"]$/)) {
+                        return arg;
+                    }
+                    // If it's a number, keep as is
+                    if (!isNaN(Number(arg)) && arg !== "") {
+                        return arg;
+                    }
+                    // If it's a boolean
+                    if (arg === "true" || arg === "false") {
+                        return arg;
+                    }
+                    // Otherwise leave as is (might be an expression)
+                    return arg;
+                })
+                .join(", ");
+
+            // Replace this one function call
+            const replacement = `d2Functions.${funcName}(${processedArgs})`;
+            processedExpression =
+                processedExpression.substring(0, startPos) +
+                replacement +
+                processedExpression.substring(closeParenPos + 1);
+        }
+
+        // Replace variable references: #{varName} for data elements
+        processedExpression = processedExpression.replace(
+            /#\{([^}]+)\}/g,
+            (_, name) => {
+                const val = variableValues[name];
+                if (val === null || val === undefined) return "null";
+                if (typeof val === "number") return String(val);
+                return getFormattedValue(name);
+            },
+        );
+
+        // Replace attribute references: A{attributeName}
+        processedExpression = processedExpression.replace(
+            /A\{([^}]+)\}/g,
+            (_, name) => {
+                const val = variableValues[name];
+                if (val === null || val === undefined) return "null";
+                if (typeof val === "number") return String(val);
+                return getFormattedValue(name);
+            },
+        );
+
+        // Replace system variable references: V{varName}
+        processedExpression = processedExpression.replace(
+            /V\{([^}]+)\}/g,
+            (_, name) => {
+                const val = variableValues[name];
+                if (val === null || val === undefined) return "null";
+                if (typeof val === "number") return String(val);
+                return getFormattedValue(name);
+            },
+        );
+
+        try {
+            // Create function with d2Functions and variableValues in scope
+            const func = new Function(
+                "d2Functions",
+                "variableValues",
+                `return (${processedExpression})`,
+            );
+            const value = func(d2Functions, variableValues);
+            return value;
+        } catch (err) {
+            console.warn(
+                `Invalid expression: ${expression}`,
+                processedExpression,
+                err,
+            );
+            return null;
+        }
     };
 
     // Step 2: Safely evaluate rule condition with d2 function support
     const evaluateCondition = (condition: string): boolean => {
         // First replace d2: function calls with JavaScript function calls
         let processedCondition = condition ?? "";
+
         // Replace d2:functionName(...) with d2Functions.functionName(...)
-        processedCondition = processedCondition.replace(
-            /d2:(\w+)\s*\(\s*([^)]+)\s*\)/g,
-            (match, funcName, args) => {
-                // Process arguments
-                const processedArgs = args
-                    .split(",")
-                    .map((arg: string) => {
-                        arg = arg.trim();
-                        // Functions that need variable name instead of value
-                        const needsVarName = [
-                            "hasValue",
-                            "count",
-                            "countIfValue",
-                            "countIfZeroPos",
-                        ].includes(funcName);
+        // Process from innermost to outermost by repeatedly replacing
+        let maxIterations = 10; // Prevent infinite loops
+        while (processedCondition.includes("d2:") && maxIterations-- > 0) {
+            // Find the first d2: function call
+            const d2Match = processedCondition.match(/d2:(\w+)\s*\(/);
+            if (!d2Match) break;
 
-                        // Handle variable references #{varName} or A{attributeName}
-                        const varMatch = arg.match(/^[#A]\{([^}]+)\}$/);
-                        if (varMatch) {
-                            const varName = varMatch[1];
-                            if (needsVarName) {
-                                return `'${varName}'`;
-                            } else {
-                                return getFormattedValue(varName);
-                            }
-                        }
+            const funcName = d2Match[1];
+            const startPos = d2Match.index!;
+            const openParenPos = startPos + d2Match[0].length - 1;
+            const closeParenPos = findClosingParen(
+                processedCondition,
+                openParenPos + 1,
+            );
 
-                        // If it's already quoted, keep as is
-                        if (arg.match(/^['"].*['"]$/)) {
-                            return arg;
-                        }
-                        // If it's a number, keep as is
-                        if (!isNaN(Number(arg)) && arg !== "") {
-                            return arg;
-                        }
-                        // If it's a boolean
-                        if (arg === "true" || arg === "false") {
-                            return arg;
-                        }
-                        // Otherwise quote it
-                        return `'${arg}'`;
-                    })
-                    .join(", ");
+            if (closeParenPos === -1) {
+                console.warn(
+                    "Could not find closing parenthesis for",
+                    d2Match[0],
+                );
+                break;
+            }
 
-                return `d2Functions.${funcName}(${processedArgs})`;
-            },
-        );
+            const argsStr = processedCondition.substring(
+                openParenPos + 1,
+                closeParenPos,
+            );
+            const args = argsStr.split(",");
+
+            const processedArgs = args
+                .map((arg: string) => {
+                    arg = arg.trim();
+
+                    // Functions that need variable name instead of value
+                    const needsVarName = [
+                        "hasValue",
+                        "count",
+                        "countIfValue",
+                        "countIfZeroPos",
+                    ].includes(funcName);
+
+                    // Handle variable references #{varName} or A{attributeName} or V{systemVar}
+                    const varMatch = arg.match(/^[#AV]\{([^}]+)\}$/);
+                    if (varMatch) {
+                        const varName = varMatch[1];
+                        if (needsVarName) {
+                            return `'${varName}'`;
+                        } else {
+                            // Get the raw value and wrap it properly
+                            const val = variableValues[varName];
+                            if (val === null || val === undefined)
+                                return "null";
+                            if (typeof val === "number") return String(val);
+                            if (typeof val === "boolean") return String(val);
+                            // For strings, escape and quote
+                            const stringVal = String(val);
+                            const escaped = stringVal
+                                .replace(/\\/g, "\\\\")
+                                .replace(/'/g, "\\'");
+                            return `'${escaped}'`;
+                        }
+                    }
+
+                    // If it's already quoted, keep as is
+                    if (arg.match(/^['"].*['"]$/)) {
+                        return arg;
+                    }
+                    // If it's a number, keep as is
+                    if (!isNaN(Number(arg)) && arg !== "") {
+                        return arg;
+                    }
+                    // If it's a boolean
+                    if (arg === "true" || arg === "false") {
+                        return arg;
+                    }
+                    // Otherwise leave as is (might be an expression)
+                    return arg;
+                })
+                .join(", ");
+
+            // Replace this one function call
+            const replacement = `d2Functions.${funcName}(${processedArgs})`;
+            processedCondition =
+                processedCondition.substring(0, startPos) +
+                replacement +
+                processedCondition.substring(closeParenPos + 1);
+        }
 
         // Replace variable references: #{varName} for data elements
         processedCondition = processedCondition.replace(
@@ -391,6 +619,14 @@ export function executeProgramRules({
         // Replace attribute references: A{attributeName} for tracked entity attributes
         processedCondition = processedCondition.replace(
             /A\{([^}]+)\}/g,
+            (_, name) => {
+                return getFormattedValue(name);
+            },
+        );
+
+        // Replace system variable references: V{varName}
+        processedCondition = processedCondition.replace(
+            /V\{([^}]+)\}/g,
             (_, name) => {
                 return getFormattedValue(name);
             },
@@ -452,9 +688,9 @@ export function executeProgramRules({
             continue;
         }
         const isTrue = evaluateCondition(rule.condition);
-        console.log(
-            `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
-        );
+        // console.log(
+        //     `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
+        // );
 
         if (!isTrue) {
             continue;
@@ -467,8 +703,12 @@ export function executeProgramRules({
                 "";
             switch (action.programRuleActionType) {
                 case "ASSIGN":
-                    if (targetId) {
-                        result.assignments[targetId] = action.value;
+                    if (targetId && action.data) {
+                        const evaluatedValue = evaluateExpression(action.data);
+                        console.log(
+                            `  ✏️  ASSIGN: ${targetId} = ${action.data} → ${evaluatedValue}`,
+                        );
+                        result.assignments[targetId] = evaluatedValue;
                     }
                     break;
 
