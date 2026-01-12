@@ -1,7 +1,7 @@
 import { useDataEngine } from "@dhis2/app-runtime";
 import { UseNavigateResult } from "@tanstack/react-router";
 import { createActorContext } from "@xstate/react";
-import { isEmpty } from "lodash";
+import { MessageInstance } from "antd/es/message/interface";
 import { assertEvent, assign, fromPromise, setup } from "xstate";
 import { FlattenedTrackedEntity } from "../db";
 import {
@@ -27,7 +27,6 @@ import {
     executeProgramRules,
     flattenTrackedEntityResponse,
 } from "../utils/utils";
-import { MessageInstance } from "antd/es/message/interface";
 
 interface TrackerContext {
     trackedEntities: FlattenedTrackedEntity[];
@@ -36,10 +35,9 @@ interface TrackerContext {
     error?: string;
     engine: ReturnType<typeof useDataEngine>;
     navigate: UseNavigateResult<"/">;
-    organisationUnits: OrgUnit[];
+    orgUnit: OrgUnit;
     currentEvent: FlattenedTrackedEntity["events"][number];
     mainEvent: FlattenedTrackedEntity["events"][number];
-    orgUnit: string;
     eventUpdates: string[];
     search: OnChange;
     registrationRuleResults: ProgramRuleResult;
@@ -138,7 +136,7 @@ export const trackerMachine = setup({
         input: {} as {
             engine: ReturnType<typeof useDataEngine>;
             navigate: UseNavigateResult<"/">;
-            organisationUnits: OrgUnit[];
+            orgUnit: OrgUnit;
             message: MessageInstance;
             syncManager?: SyncManager;
         },
@@ -163,97 +161,63 @@ export const trackerMachine = setup({
                 fields: "trackedEntity,orgUnit,createdAt,updatedAt,inactive,attributes,enrollments[*,events[*]]",
             });
 
-            for (const [filterKey, filterValues] of Object.entries(
-                search?.filters || {},
-            )) {
-                if (filterValues && filterValues.length > 0) {
-                    params.append(
-                        `filter`,
-                        `${filterKey}:eq:${filterValues[0]}`,
-                    );
+            if (Object.keys(search.filters || {}).length > 0) {
+                for (const [filterKey, filterValues] of Object.entries(
+                    search?.filters || {},
+                )) {
+                    if (
+                        filterValues &&
+                        filterValues.length > 0 &&
+                        filterValues[0]
+                    ) {
+                        params.append(
+                            `filter`,
+                            `${filterKey}:ilike:${filterValues[0]}`,
+                        );
+                    }
                 }
+                const data = await queryClient.fetchQuery(
+                    resourceQueryOptions<TrackedEntityResponse>({
+                        engine,
+                        resource: `tracker/trackedEntities?${params.toString()}`,
+                        queryKey: [
+                            "trackedEntities",
+                            orgUnits,
+                            Array.from(params.values()).sort().join(","),
+                        ],
+                    }),
+                );
+                return flattenTrackedEntityResponse(data);
             }
-            const data = await queryClient.fetchQuery(
-                resourceQueryOptions<TrackedEntityResponse>({
-                    engine,
-                    resource: `tracker/trackedEntities?${params.toString()}`,
-                    queryKey: [
-                        "trackedEntities",
-                        orgUnits,
-                        Array.from(params.values()).sort().join(","),
-                    ],
-                }),
-            );
-            return flattenTrackedEntityResponse(data);
+            return [];
         }),
 
         createOrUpdateEvents: fromPromise<
             void,
             {
-                engine: ReturnType<typeof useDataEngine>;
+                syncManager?: SyncManager;
                 events: FlattenedTrackedEntity["events"];
             }
-        >(async ({ input: { engine, events } }) => {
-            const allEvents = events.map(({ dataValues, ...event }) => {
-                return {
-                    ...event,
-                    dataValues: Object.entries(dataValues).flatMap(
-                        ([dataElement, value]) => {
-                            if (!isEmpty(value)) {
-                                if (Array.isArray(value)) {
-                                    return {
-                                        dataElement,
-                                        value: value.join(","),
-                                    };
-                                }
-                                return {
-                                    dataElement,
-                                    value,
-                                };
-                            }
-                            return [];
-                        },
-                    ),
-                };
-            });
-            const response = await engine.mutate({
-                resource: "tracker",
-                type: "create",
-                data: { events: allEvents },
-                params: { async: false },
-            });
+        >(async ({ input: { syncManager, events } }) => {
+            for (const event of events) {
+                await saveEvent(event);
+                if (syncManager) {
+                    await syncManager.queueCreateEvent(event, 7);
+                }
+            }
         }),
         createOrUpdateTrackedEntity: fromPromise<
             FlattenedTrackedEntity,
             {
-                engine: ReturnType<typeof useDataEngine>;
+                syncManager?: SyncManager;
                 trackedEntity: FlattenedTrackedEntity;
             }
-        >(async ({ input: { engine, trackedEntity } }) => {
-            const { attributes, enrollment, events, ...rest } = trackedEntity;
+        >(async ({ input: { syncManager, trackedEntity } }) => {
+            await saveTrackedEntity(trackedEntity);
+            if (syncManager) {
+                await syncManager.queueCreateTrackedEntity(trackedEntity, 8);
+            }
 
-            const allAttributes = Object.entries(attributes).flatMap(
-                ([attribute, value]) => {
-                    if (!isEmpty(value)) {
-                        return { attribute, value };
-                    }
-                    return [];
-                },
-            );
-
-            const trackedEntities = [
-                {
-                    ...rest,
-                    attributes: [],
-                },
-            ];
-            const enrollments = [{ ...enrollment, attributes: allAttributes }];
-            const response = await engine.mutate({
-                resource: "tracker",
-                type: "create",
-                data: { trackedEntities, enrollments },
-                params: { async: false },
-            });
             return trackedEntity;
         }),
     },
@@ -275,7 +239,7 @@ export const trackerMachine = setup({
         resetTrackedEntity: assign({
             trackedEntity: ({ context }) => {
                 return createEmptyTrackedEntity({
-                    orgUnit: context.orgUnit,
+                    orgUnit: context.orgUnit.id,
                 });
             },
         }),
@@ -284,7 +248,7 @@ export const trackerMachine = setup({
             mainEvent: ({ context }) => {
                 const enrollment = context.trackedEntity?.enrollment;
                 return createEmptyEvent({
-                    orgUnit: enrollment?.orgUnit || context.orgUnit,
+                    orgUnit: enrollment?.orgUnit || context.orgUnit.id,
                     enrollment: enrollment?.enrollment || generateUid(),
                     program: enrollment?.program || "ueBhWkWll5v",
                     trackedEntity:
@@ -298,7 +262,7 @@ export const trackerMachine = setup({
             currentEvent: ({ context }) => {
                 const enrollment = context.trackedEntity?.enrollment;
                 return createEmptyEvent({
-                    orgUnit: enrollment?.orgUnit || context.orgUnit,
+                    orgUnit: enrollment?.orgUnit || context.orgUnit.id,
                     enrollment: enrollment?.enrollment || generateUid(),
                     program: enrollment?.program || "ueBhWkWll5v",
                     trackedEntity:
@@ -420,7 +384,6 @@ export const trackerMachine = setup({
             modalState: () => "closed" as const,
         }),
 
-        // IndexedDB persistence actions
         persistTrackedEntity: async ({ context }) => {
             if (context.trackedEntity?.trackedEntity) {
                 await saveTrackedEntity(context.trackedEntity);
@@ -443,7 +406,7 @@ export const trackerMachine = setup({
             if (context.syncManager && context.trackedEntity?.trackedEntity) {
                 await context.syncManager.queueCreateTrackedEntity(
                     context.trackedEntity,
-                    8, // High priority for user-initiated actions
+                    8,
                 );
             }
         },
@@ -454,9 +417,7 @@ export const trackerMachine = setup({
                 event.type === "CREATE_OR_UPDATE_EVENT" &&
                 event.event?.event
             ) {
-                // ✅ FIX: Ensure orgUnit, enrollment, program, and trackedEntity are always set before syncing
                 const enrollment = context.trackedEntity?.enrollment;
-
                 const eventToSync = {
                     ...event.event,
                     orgUnit:
@@ -471,9 +432,59 @@ export const trackerMachine = setup({
                         context.trackedEntity?.trackedEntity,
                 };
 
-                await context.syncManager.queueCreateEvent(
-                    eventToSync,
-                    7, // High priority for user-initiated actions
+                await context.syncManager.queueCreateEvent(eventToSync, 7);
+            }
+        },
+        queueAllEventsSync: async ({ context }) => {
+            if (!context.syncManager || context.eventUpdates.length === 0) {
+                return;
+            }
+            const enrollment = context.trackedEntity?.enrollment;
+            for (const eventId of context.eventUpdates) {
+                const eventToSync = context.trackedEntity.events.find(
+                    (e) => e.event === eventId,
+                );
+
+                if (eventToSync) {
+                    const completeEvent = {
+                        ...eventToSync,
+                        orgUnit:
+                            eventToSync.orgUnit ||
+                            enrollment?.orgUnit ||
+                            context.orgUnit,
+                        enrollment:
+                            eventToSync.enrollment || enrollment?.enrollment,
+                        program: eventToSync.program || "ueBhWkWll5v",
+                        trackedEntity:
+                            eventToSync.trackedEntity ||
+                            context.trackedEntity?.trackedEntity,
+                    };
+
+                    await context.syncManager.queueCreateEvent(
+                        completeEvent,
+                        7,
+                    );
+                    console.log(`  ✅ Queued event ${eventId} for sync`);
+                }
+            }
+
+            console.log("📤 All events queued successfully");
+        },
+
+        persistAndQueueTrackedEntity: async ({ context }) => {
+            if (!context.trackedEntity?.trackedEntity) {
+                return;
+            }
+            await saveTrackedEntity(context.trackedEntity);
+            console.log(
+                "💾 Persisted tracked entity to IndexedDB:",
+                context.trackedEntity.trackedEntity,
+            );
+
+            if (context.syncManager) {
+                await context.syncManager.queueCreateTrackedEntity(
+                    context.trackedEntity,
+                    8,
                 );
             }
         },
@@ -494,7 +505,6 @@ export const trackerMachine = setup({
             // Route results based on programStage context, not just attributeValues presence
             // attributeValues can be included for reference even in program stage events
             if (event.programStage === undefined) {
-                // No programStage means this is registration
                 return { registrationRuleResults: results };
             } else if (event.programStage === context.mainEvent.programStage) {
                 return { mainEventRuleResults: results };
@@ -571,14 +581,14 @@ export const trackerMachine = setup({
     id: "tracker",
     initial: "initial",
     context: ({
-        input: { engine, navigate, organisationUnits, syncManager, message },
+        input: { engine, navigate, orgUnit, syncManager, message },
     }) => {
-        const defaultOrgUnit = organisationUnits[0]?.id || "";
+        const defaultOrgUnit = orgUnit.id;
         return {
             trackedEntities: [],
             engine,
             navigate,
-            organisationUnits,
+            orgUnit,
             trackedEntity: createEmptyTrackedEntity({
                 orgUnit: defaultOrgUnit,
             }),
@@ -640,7 +650,7 @@ export const trackerMachine = setup({
                 hiddenOptionGroups: {},
                 shownOptionGroups: {},
             },
-            orgUnit: organisationUnits[0]?.id || "",
+
             eventUpdates: [],
             search: {
                 pagination: { current: 1, pageSize: 10, total: 0 },
@@ -661,12 +671,12 @@ export const trackerMachine = setup({
                         search: ({ event }) => event.search,
                     }),
                 },
-                SET_ORG_UNIT: {
-                    target: "loading",
-                    actions: assign({
-                        orgUnit: ({ event }) => event.orgUnit,
-                    }),
-                },
+                // SET_ORG_UNIT: {
+                //     target: "loading",
+                //     actions: assign({
+                //         orgUnit: ({ event }) => event.orgUnit,
+                //     }),
+                // },
 
                 SET_TRACKED_ENTITY: {
                     target: "entitySuccess",
@@ -730,7 +740,7 @@ export const trackerMachine = setup({
                         assign({
                             trackedEntity: ({ context }) =>
                                 createEmptyTrackedEntity({
-                                    orgUnit: context.orgUnit,
+                                    orgUnit: context.orgUnit.id,
                                 }),
                         }),
                         "resetRegistrationRules", // Reset rules when creating new patient
@@ -745,7 +755,7 @@ export const trackerMachine = setup({
                 input: ({ context: { engine, orgUnit, search } }) => {
                     return {
                         engine,
-                        orgUnits: orgUnit,
+                        orgUnits: orgUnit.id,
                         search,
                     };
                 },
@@ -810,7 +820,7 @@ export const trackerMachine = setup({
                         assign({
                             trackedEntity: ({ context }) =>
                                 createEmptyTrackedEntity({
-                                    orgUnit: context.orgUnit,
+                                    orgUnit: context.orgUnit.id,
                                 }),
                         }),
                         "resetRegistrationRules",
@@ -880,8 +890,6 @@ export const trackerMachine = setup({
                                 ];
                             },
                         }),
-                        "persistEvent",
-                        "queueEventSync",
                     ],
                 },
                 SAVE_EVENTS: "optimisticUpdate",
@@ -891,8 +899,8 @@ export const trackerMachine = setup({
             entry: "showSavingNotification",
             invoke: {
                 src: "createOrUpdateTrackedEntity",
-                input: ({ context: { engine, trackedEntity } }) => {
-                    return { engine, trackedEntity };
+                input: ({ context: { syncManager, trackedEntity } }) => {
+                    return { syncManager, trackedEntity };
                 },
                 onDone: {
                     target: "entitySuccess",
@@ -901,7 +909,6 @@ export const trackerMachine = setup({
                             trackedEntity: ({ event }) => event.output,
                             eventUpdates: () => [],
                         }),
-                        "persistTrackedEntity",
                         "showSuccessNotification",
                         "gotoEntity",
                     ],
@@ -924,9 +931,9 @@ export const trackerMachine = setup({
             entry: "showSavingNotification",
             invoke: {
                 src: "createOrUpdateTrackedEntity",
-                input: ({ context: { engine }, event }) => {
+                input: ({ context: { syncManager }, event }) => {
                     assertEvent(event, "CREATE_TRACKED_CHILD_ENTITY");
-                    return { engine, trackedEntity: event.trackedEntity };
+                    return { syncManager, trackedEntity: event.trackedEntity };
                 },
                 onDone: {
                     actions: "showSuccessNotification",
@@ -950,10 +957,10 @@ export const trackerMachine = setup({
             invoke: {
                 src: "createOrUpdateEvents",
                 input: ({
-                    context: { engine, trackedEntity, eventUpdates },
+                    context: { syncManager, trackedEntity, eventUpdates },
                 }) => {
                     return {
-                        engine,
+                        syncManager,
                         events: trackedEntity.events.filter((event) =>
                             eventUpdates.includes(event.event),
                         ),

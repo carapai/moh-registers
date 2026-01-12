@@ -1,8 +1,8 @@
-import React, { useState } from "react";
-import { Layout, Space, Typography, Divider, Button, Badge, Tooltip } from "antd";
 import { DatabaseOutlined, FileTextOutlined } from "@ant-design/icons";
-import { SyncStatus } from "./sync-status";
+import { Button, Divider, Layout, Space, Tooltip, Typography } from "antd";
+import React, { useState } from "react";
 import { DraftRecovery } from "./draft-recovery";
+import { SyncStatus } from "./sync-status";
 
 const { Header } = Layout;
 const { Title } = Typography;

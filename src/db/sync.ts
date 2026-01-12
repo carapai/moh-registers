@@ -475,11 +475,16 @@ export class SyncManager {
         const trackedEntities = [
             {
                 ...rest,
-                attributes: [],
+                attributes: allAttributes, // ✅ FIX: Attributes belong on trackedEntity, not enrollment
             },
         ];
 
-        const enrollments = [{ ...enrollment, attributes: allAttributes }];
+        const enrollments = [
+            {
+                ...enrollment,
+                attributes: [], // Enrollment doesn't need attributes, they're on trackedEntity
+            },
+        ];
 
         await this.engine.mutate({
             resource: "tracker",

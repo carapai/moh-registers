@@ -28,9 +28,11 @@ const { Text } = Typography;
 export default function DobPicker({
     form,
     dataElement,
+    onTriggerProgramRules,
 }: {
     form: FormInstance<any>;
     dataElement: DataElement | TrackedEntityAttribute;
+    onTriggerProgramRules?: () => void;
 }) {
     const [years, setYears] = useState<number | null>(null);
     const [months, setMonths] = useState<number | null>(null);
@@ -51,6 +53,7 @@ export default function DobPicker({
         );
         // Store as string immediately
         form.setFieldValue(dataElement.id, calculatedDob.format('YYYY-MM-DD'));
+        onTriggerProgramRules?.();
     };
 
     const handleDateChange = (date: dayjs.Dayjs | null) => {
@@ -67,6 +70,7 @@ export default function DobPicker({
             setDays(null);
             form.setFieldValue(dataElement.id, null);
         }
+        onTriggerProgramRules?.();
     };
 
     // Get the field value and convert to dayjs if it's a string

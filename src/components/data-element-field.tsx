@@ -33,6 +33,7 @@ export const DataElementField = React.memo<{
     span?: number;
     form: FormInstance<any>;
     customLabel?: string;
+    onTriggerProgramRules?: () => void;
 }>(
     ({
         dataElement,
@@ -47,9 +48,19 @@ export const DataElementField = React.memo<{
         span = 8,
         form,
         customLabel,
+        onTriggerProgramRules,
     }) => {
         if (hidden) return null;
-        let element: React.ReactNode = <Input />;
+
+        // Determine if this field should trigger rules on blur or change
+        const isTextInput =
+            !dataElement.optionSetValue &&
+            !["BOOLEAN", "AGE"].includes(dataElement.valueType ?? "") &&
+            !isDate(dataElement.valueType);
+
+        let element: React.ReactNode = (
+            <Input onBlur={isTextInput ? onTriggerProgramRules : undefined} />
+        );
         if (dataElement.id === "oTI0DLitzFY") {
             element = (
                 <VillageSelect
@@ -82,6 +93,7 @@ export const DataElementField = React.memo<{
                     }}
                     allowClear
                     mode="multiple"
+                    onChange={onTriggerProgramRules}
                     showSearch={{
                         filterOption: (input, option) =>
                             option
@@ -101,7 +113,10 @@ export const DataElementField = React.memo<{
             renderOptionsAsRadio
         ) {
             element = (
-                <Radio.Group vertical={vertical}>
+                <Radio.Group
+                    vertical={vertical}
+                    onChange={onTriggerProgramRules}
+                >
                     {finalOptions?.map((o) => (
                         <Radio key={o.code} value={o.code}>
                             {o.name}
@@ -119,6 +134,7 @@ export const DataElementField = React.memo<{
                         value: "code",
                     }}
                     allowClear
+                    onChange={onTriggerProgramRules}
                     showSearch={{
                         filterOption: (input, option) =>
                             option
@@ -134,20 +150,31 @@ export const DataElementField = React.memo<{
             );
         } else if (dataElement.valueType === "BOOLEAN") {
             element = (
-                <Checkbox>{dataElement.formName ?? dataElement.name}</Checkbox>
+                <Checkbox onChange={onTriggerProgramRules}>
+                    {dataElement.formName ?? dataElement.name}
+                </Checkbox>
             );
         } else if (dataElement.valueType === "AGE") {
-            element = <DobPicker form={form} dataElement={dataElement} />;
+            element = (
+                <DobPicker
+                    form={form}
+                    dataElement={dataElement}
+                    onTriggerProgramRules={onTriggerProgramRules}
+                />
+            );
         } else if (isDate(dataElement.valueType)) {
             element = (
                 <DatePicker
                     style={{
                         width: "100%",
                     }}
+                    onChange={onTriggerProgramRules}
                 />
             );
         } else if (dataElement.valueType === "LONG_TEXT") {
-            element = <Input.TextArea rows={4} />;
+            element = (
+                <Input.TextArea rows={4} onBlur={onTriggerProgramRules} />
+            );
         } else if (
             ["NUMBER", "INTEGER", "INTEGER_POSITIVE"].includes(
                 dataElement.valueType ?? "",
@@ -158,12 +185,20 @@ export const DataElementField = React.memo<{
                     style={{
                         width: "100%",
                     }}
+                    onBlur={onTriggerProgramRules}
                 />
             );
         }
 
         return (
-            <Col span={span} key={dataElement.id}>
+            <Col
+                key={dataElement.id}
+                sm={{ span: 24 }}
+                md={{ span: 24 }}
+                lg={{ span }}
+                xs={{ span: 24 }}
+                xl={{ span }}
+            >
                 <Form.Item
                     key={dataElement.id}
                     label={
@@ -179,11 +214,6 @@ export const DataElementField = React.memo<{
                             required: required,
                             message: `${customLabel || dataElement.formName || dataElement.name} is required`,
                         },
-                        ...errors.map((error) => ({
-                            validator: async () => {
-                                return Promise.reject(new Error(error.content));
-                            },
-                        })),
                     ]}
                     getValueProps={createGetValueProps(dataElement.valueType)}
                     normalize={createNormalize(dataElement.valueType)}

@@ -171,7 +171,7 @@ export default function VillageSelect({
                 } = v;
                 return {
                     value: `${village_id}(${village_name})`,
-                    label: [District, subcounty_name, parish_name, village_name]
+                    label: [village_name, parish_name, subcounty_name, District]
                         .filter(Boolean)
                         .join("/"),
                 };

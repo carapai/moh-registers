@@ -21,7 +21,11 @@ export const router = createRouter({
     defaultPendingComponent: () => <Spinner />,
     defaultErrorComponent: ({ error }) => <ErrorComponent error={error} />,
     history: createHashHistory(),
-    context: { queryClient: new QueryClient(), engine: undefined! },
+    context: {
+        queryClient: new QueryClient(),
+        engine: undefined!,
+        orgUnit: undefined!,
+    },
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
 });

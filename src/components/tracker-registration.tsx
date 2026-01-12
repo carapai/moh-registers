@@ -1,12 +1,28 @@
-import { UserAddOutlined } from "@ant-design/icons";
-import { Button, Card, Flex, Form, message, Modal, Row, Typography } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
+import { PlusOutlined, UserAddOutlined } from "@ant-design/icons";
+import {
+    Button,
+    Card,
+    Flex,
+    Form,
+    message,
+    Modal,
+    Row,
+    Typography,
+} from "antd";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { TrackerContext } from "../machines/tracker";
 import { DataElementField } from "./data-element-field";
 import { RootRoute } from "../routes/__root";
 import { flattenTrackedEntity } from "../utils/utils";
 
 const { Text } = Typography;
+
+const spans = new Map<string, number>([
+    ["XjgpfkoxffK", 5],
+    ["W87HAtUHJjB", 5],
+    ["PKuyTiVCR89", 5],
+    ["oTI0DLitzFY", 9],
+]);
 
 export const TrackerRegistration: React.FC = () => {
     const {
@@ -44,7 +60,8 @@ export const TrackerRegistration: React.FC = () => {
         );
     }, []);
 
-    const handleValuesChange = (_changed: any, allValues: any) => {
+    const handleTriggerProgramRules = useCallback(() => {
+        const allValues = form.getFieldsValue();
         trackerActor.send({
             type: "EXECUTE_PROGRAM_RULES",
             attributeValues: allValues,
@@ -54,7 +71,8 @@ export const TrackerRegistration: React.FC = () => {
         trackerActor.send({
             type: "UPDATE_DATA_WITH_ASSIGNMENTS",
         });
-    };
+        console.log("Triggered program rules with values:", ruleResult);
+    }, [form, trackerActor, programRules, programRuleVariables]);
 
     useEffect(() => {
         if (isVisitModalOpen) {
@@ -69,6 +87,13 @@ export const TrackerRegistration: React.FC = () => {
             });
         }
     }, [isVisitModalOpen]);
+
+    // Apply assignments when rule results change
+    useEffect(() => {
+        if (isVisitModalOpen && Object.keys(ruleResult.assignments).length > 0) {
+            form.setFieldsValue(ruleResult.assignments);
+        }
+    }, [ruleResult.assignments, isVisitModalOpen, form]);
 
     // Listen for state machine transitions and show appropriate messages
     // Only show success message if we were actually submitting
@@ -133,13 +158,9 @@ export const TrackerRegistration: React.FC = () => {
     };
 
     const addPatient = () => {
-        // trackerActor.send({
-        //     type: "RESET_TRACKED_ENTITY",
-        // });
-        console.log(
-            "Resetting form for new patient registration",
-            trackedEntity,
-        );
+        trackerActor.send({
+            type: "RESET_TRACKED_ENTITY",
+        });
         form.resetFields();
         setModalKey((prev) => prev + 1);
         setIsVisitModalOpen(() => true);
@@ -148,18 +169,21 @@ export const TrackerRegistration: React.FC = () => {
         <>
             <Button
                 type="primary"
-                icon={<UserAddOutlined />}
-                style={{
-                    background:
-                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
-                    // borderColor: "#7c3aed",
-                    // borderRadius: 8,
-                    fontWeight: 500,
-                    // boxShadow: "0 2px 4px rgba(124, 58, 237, 0.2)",
-                }}
+                size="large"
+                icon={<PlusOutlined />}
                 onClick={addPatient}
+                style={{
+                    background: "#52c41a",
+                    borderColor: "#52c41a",
+                    // height: "48px",
+                    fontSize: "18px",
+                    fontWeight: 500,
+                    padding: "0 40px",
+                    // borderRadius: "6px",
+                    // marginTop: "8px",
+                }}
             >
-                Register New Patient
+                New patient
             </Button>
             <Modal
                 key={modalKey}
@@ -240,7 +264,6 @@ export const TrackerRegistration: React.FC = () => {
                     layout="vertical"
                     fields={fields}
                     onFinish={onStageSubmit}
-                    onValuesChange={handleValuesChange}
                     style={{ margin: 0, padding: 0 }}
                     initialValues={trackedEntity.attributes}
                 >
@@ -310,8 +333,11 @@ export const TrackerRegistration: React.FC = () => {
                                                         allAttributes.get(id) ||
                                                         false
                                                     }
-                                                    span={6}
+                                                    span={spans.get(id) || 6}
                                                     form={form}
+                                                    onTriggerProgramRules={
+                                                        handleTriggerProgramRules
+                                                    }
                                                 />
                                             );
                                         })}

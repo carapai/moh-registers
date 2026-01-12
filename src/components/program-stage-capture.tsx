@@ -155,8 +155,9 @@ export const ProgramStageCapture: React.FC<{
         },
     ];
 
-    const handleValuesChange = useCallback(
-        (_changed: any, allValues: any) => {
+    const handleTriggerProgramRules = useCallback(
+        () => {
+            const allValues = stageForm.getFieldsValue();
             trackerActor.send({
                 type: "EXECUTE_PROGRAM_RULES",
                 dataValues: allValues,
@@ -169,7 +170,7 @@ export const ProgramStageCapture: React.FC<{
                 type: "UPDATE_DATA_WITH_ASSIGNMENTS",
             });
         },
-        [trackedEntity.attributes],
+        [trackedEntity.attributes, stageForm, programStage.id, programRules, programRuleVariables, trackerActor],
     );
 
     useEffect(() => {
@@ -198,10 +199,7 @@ export const ProgramStageCapture: React.FC<{
     }, [isVisitModalOpen, currentEvent.event, trackerActor, stageForm]);
 
     useEffect(() => {
-        if (
-            isVisitModalOpen &&
-            Object.keys(ruleResult.assignments).length > 0
-        ) {
+        if (isVisitModalOpen && Object.keys(ruleResult.assignments).length > 0) {
             stageForm.setFieldsValue(ruleResult.assignments);
         }
     }, [ruleResult.assignments, isVisitModalOpen, stageForm]);
@@ -392,7 +390,6 @@ export const ProgramStageCapture: React.FC<{
                     form={stageForm}
                     layout="vertical"
                     onFinish={onStageSubmit}
-                    onValuesChange={handleValuesChange}
                     style={{ margin: 0, padding: 0 }}
                     initialValues={currentEvent.dataValues}
                 >
@@ -516,6 +513,7 @@ export const ProgramStageCapture: React.FC<{
                                                         required={compulsory}
                                                         key={`${section.id}${dataElement.id}`}
                                                         form={stageForm}
+                                                        onTriggerProgramRules={handleTriggerProgramRules}
                                                     />
                                                 );
                                             },

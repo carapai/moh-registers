@@ -7,12 +7,14 @@ export const resourceQueryOptions = <T>({
     params,
     id,
     queryKey,
+    refetchInterval,
 }: {
     engine: ReturnType<typeof useDataEngine>;
     resource: string;
     params?: Record<string, any>;
     id?: string;
     queryKey?: QueryKey;
+    refetchInterval?: number;
 }) => {
     return queryOptions({
         queryKey: [
@@ -31,5 +33,6 @@ export const resourceQueryOptions = <T>({
             })) as { resource: T };
             return response.resource;
         },
+        refetchInterval,
     });
 };

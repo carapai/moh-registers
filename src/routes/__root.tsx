@@ -1,19 +1,30 @@
 import { useDataEngine } from "@dhis2/app-runtime";
 import { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, Outlet } from "@tanstack/react-router";
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
+
+import {
+    FileTextOutlined,
+    HomeOutlined,
+    MoreOutlined,
+} from "@ant-design/icons";
+import { Button, Layout, Space, Tooltip, Typography } from "antd";
+
+const { Header } = Layout;
+const { Title, Text } = Typography;
 
 import { Flex } from "antd";
 import useApp from "antd/es/app/useApp";
 import { groupBy } from "lodash";
-import { AppHeader } from "../components/app-header";
 import { SyncErrorBoundary } from "../components/sync-error-boundary";
+import { SyncStatus } from "../components/sync-status";
 import { db } from "../db";
 import { createSyncManager } from "../db/sync";
 import { TrackerContext } from "../machines/tracker";
 import { resourceQueryOptions } from "../query-options";
 import {
     DataElement,
+    OrgUnit,
     Program,
     ProgramRule,
     ProgramRuleVariable,
@@ -23,27 +34,10 @@ import {
 export const RootRoute = createRootRouteWithContext<{
     queryClient: QueryClient;
     engine: ReturnType<typeof useDataEngine>;
+    orgUnit: OrgUnit;
 }>()({
     component: RootRouteComponent,
     loader: async ({ context: { queryClient, engine } }) => {
-        const me = await queryClient.ensureQueryData(
-            resourceQueryOptions<{
-                organisationUnits: {
-                    id: string;
-                    name: string;
-                    level: number;
-                    parent?: { id: string };
-                    leaf: boolean;
-                }[];
-                id: string;
-            }>({
-                engine,
-                resource: "me",
-                params: {
-                    fields: "id,organisationUnits[id,name,level,parent,leaf]",
-                },
-            }),
-        );
         const prevDataElements = await db.dataElements.count();
         const prevAttributes = await db.trackedEntityAttributes.count();
         const prevProgramRules = await db.programRules.count();
@@ -184,7 +178,6 @@ export const RootRoute = createRootRouteWithContext<{
             await db.optionSets.bulkPut(finalOptionSets);
             await db.villages.bulkPut(villages);
             return {
-                ...me,
                 dataElements: new Map(dataElements.map((de) => [de.id, de])),
                 trackedEntityAttributes: new Map(
                     trackedEntityAttributes.map((ta) => [ta.id, ta]),
@@ -217,7 +210,6 @@ export const RootRoute = createRootRouteWithContext<{
         const villages = await db.villages.toArray();
 
         return {
-            ...me,
             dataElements: new Map(dataElements.map((de) => [de.id, de])),
             trackedEntityAttributes: new Map(
                 trackedEntityAttributes.map((ta) => [ta.id, ta]),
@@ -241,16 +233,16 @@ export const RootRoute = createRootRouteWithContext<{
 });
 
 function RootRouteComponent() {
-    const { engine } = RootRoute.useRouteContext();
+    const { engine, orgUnit } = RootRoute.useRouteContext();
     const { message } = useApp();
     const navigate = RootRoute.useNavigate();
-    const { organisationUnits } = RootRoute.useLoaderData();
-    // Initialize sync manager (memoized to prevent recreation on re-renders)
     const syncManager = useMemo(() => {
         const manager = createSyncManager(engine);
         manager.startAutoSync(3000);
         return manager;
     }, [engine]);
+
+    const [draftModalVisible, setDraftModalVisible] = useState(false);
 
     return (
         <SyncErrorBoundary
@@ -265,33 +257,67 @@ function RootRouteComponent() {
                     input: {
                         engine,
                         navigate,
-                        organisationUnits,
+                        orgUnit,
                         syncManager,
                         message,
                     },
                 }}
             >
-                <Flex
-                    vertical
+                <Layout
                     style={{
-                        height: "calc(100vh - 48px)",
                         minHeight: "calc(100vh - 48px)",
-                        backgroundColor: "#f5f5f5",
+                        background: "#f0f2f5",
                     }}
                 >
-                    <AppHeader title="MOH Registers" />
-                    <Flex
-                        vertical
+                    <Header
                         style={{
-                            height: "calc(100vh - 96px)",
-                            minHeight: "calc(100vh - 96px)",
-                            padding: 10,
-                            overflowY: "auto",
+                            background: "#fff",
+                            padding: "0 16px",
+                            display: "flex",
+                            alignItems: "center",
+                            alignContent: "center",
+                            justifyItems: "center",
+                            justifyContent: "space-between",
+                            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
                         }}
                     >
-                        <Outlet />
-                    </Flex>
-                </Flex>
+                        <Flex align="center" gap="large">
+                            <img
+                                src="https://upload.wikimedia.org/wikipedia/commons/7/7c/Coat_of_arms_of_Uganda.svg"
+                                alt="Uganda Coat of Arms"
+                                style={{ height: 54 }}
+                            />
+                            <Title
+                                level={3}
+                                style={{ margin: 0, color: "#1f4788" }}
+                            >
+                                Medical{" "}
+                                <Text style={{ fontWeight: 300 }}>
+                                    eRegistry
+                                </Text>
+                            </Title>
+                        </Flex>
+
+                        <Space>
+                            <HomeOutlined
+                                style={{ fontSize: 20, color: "#1890ff" }}
+                            />
+                            <Text strong>{orgUnit.name}</Text>
+                            <Button type="text" icon={<MoreOutlined />} />
+                            <Tooltip title="Recover saved drafts">
+                                <Button
+                                    icon={<FileTextOutlined />}
+                                    onClick={() => setDraftModalVisible(true)}
+                                >
+                                    Drafts
+                                </Button>
+                            </Tooltip>
+                            <SyncStatus />
+                        </Space>
+                    </Header>
+
+                    <Outlet />
+                </Layout>
             </TrackerContext.Provider>
         </SyncErrorBoundary>
     );

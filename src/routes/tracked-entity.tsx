@@ -29,7 +29,7 @@ import {
     message,
 } from "antd";
 import dayjs from "dayjs";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DataElementField } from "../components/data-element-field";
 import { ProgramStageCapture } from "../components/program-stage-capture";
 import { FlattenedEvent } from "../db";
@@ -238,8 +238,6 @@ function TrackedEntity() {
 
     const openNestedModal = () => {
         nestedForm.resetFields();
-
-        // Auto-populate attributes from parent tracked entity
         const autoPopulatedAttributes: Record<string, any> = {};
         parentAttributesToCopy.forEach((attributeId) => {
             if (
@@ -261,8 +259,6 @@ function TrackedEntity() {
             ([dataElementId, attributeId]) => {
                 if (currentFormValues[dataElementId]) {
                     let value = currentFormValues[dataElementId];
-
-                    // Convert dayjs objects to string format for date fields
                     if (
                         value &&
                         typeof value === "object" &&
@@ -396,7 +392,9 @@ function TrackedEntity() {
         children: <Text>{String(value)}</Text>,
     }));
 
-    const handleValuesChange = (_changed: any, allValues: any) => {
+    const handleTriggerProgramRules = useCallback(() => {
+        const allValues = visitForm.getFieldsValue();
+        const _changed = allValues;
         if (_changed && _changed["REWqohCg4Km"] === "Yes") {
             openNestedModal();
         }
@@ -411,7 +409,14 @@ function TrackedEntity() {
         trackerActor.send({
             type: "UPDATE_DATA_WITH_ASSIGNMENTS",
         });
-    };
+    }, [
+        visitForm,
+        trackerActor,
+        programRules,
+        programRuleVariables,
+        mainEvent.programStage,
+        trackedEntity.attributes,
+    ]);
 
     useEffect(() => {
         if (isVisitModalOpen) {
@@ -439,21 +444,20 @@ function TrackedEntity() {
 
     // Apply program rule assignments to form fields automatically
     useEffect(() => {
-        if (
-            isVisitModalOpen &&
-            Object.keys(ruleResult.assignments).length > 0
-        ) {
-            visitForm.setFieldsValue(ruleResult.assignments);
-        }
-        if (isVisitModalOpen && ruleResult.hiddenOptions["QwsvSPpnRul"]) {
-            setServiceTypes((prev) =>
-                prev.flatMap((o) => {
-                    if (ruleResult.hiddenOptions["QwsvSPpnRul"].has(o.id)) {
-                        return [];
-                    }
-                    return o;
-                }),
-            );
+        if (isVisitModalOpen) {
+            if (Object.keys(ruleResult.assignments).length > 0) {
+                visitForm.setFieldsValue(ruleResult.assignments);
+            }
+            if (ruleResult.hiddenOptions["QwsvSPpnRul"]) {
+                setServiceTypes((prev) =>
+                    prev.flatMap((o) => {
+                        if (ruleResult.hiddenOptions["QwsvSPpnRul"].has(o.id)) {
+                            return [];
+                        }
+                        return o;
+                    }),
+                );
+            }
         }
     }, [ruleResult, isVisitModalOpen, visitForm]);
 
@@ -706,7 +710,6 @@ function TrackedEntity() {
                     form={visitForm}
                     layout="vertical"
                     onFinish={onVisitSubmit}
-                    onValuesChange={handleValuesChange}
                     style={{ margin: 0, padding: 0 }}
                     initialValues={{
                         ...mainEvent.dataValues,
@@ -1004,6 +1007,9 @@ function TrackedEntity() {
                                                                             }
                                                                             form={
                                                                                 visitForm
+                                                                            }
+                                                                            onTriggerProgramRules={
+                                                                                handleTriggerProgramRules
                                                                             }
                                                                         />
                                                                     );
