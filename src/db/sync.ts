@@ -3,6 +3,7 @@ import { db, type SyncOperation } from "./index";
 import {
     completeSyncOperation,
     deleteOldDrafts,
+    deleteSyncOperation,
     failSyncOperation,
     getNextSyncOperation,
     getSyncOperationsByStatus,
@@ -246,7 +247,7 @@ export class SyncManager {
                     if (eventOps.length > 0) {
                         await this.processBatchedEvents(eventOps);
                         for (const op of eventOps) {
-                            await completeSyncOperation(op.id);
+                            await deleteSyncOperation(op.id);
                             syncedCount++;
                         }
                     }
@@ -255,7 +256,7 @@ export class SyncManager {
                     for (const op of entityOps) {
                         try {
                             await this.processSyncOperation(op);
-                            await completeSyncOperation(op.id);
+                            await deleteSyncOperation(op.id);
                             syncedCount++;
                         } catch (error: any) {
                             console.error("❌ Sync operation failed:", error);
@@ -305,6 +306,13 @@ export class SyncManager {
         for (let i = 0; i < size; i++) {
             const op = await getNextSyncOperation();
             if (!op) break;
+
+            // Log retry attempts
+            if (op.status === "failed") {
+                console.log(
+                    `🔄 Retrying failed operation (attempt ${op.attempts + 1}/3): ${op.type} - ${op.entityId}`,
+                );
+            }
 
             // Mark as syncing
             await updateSyncOperation(op.id, {
@@ -378,12 +386,7 @@ export class SyncManager {
     ): Promise<void> {
         console.log(`🔄 Processing: ${operation.type} - ${operation.entityId}`);
 
-        // Mark as syncing
-        await updateSyncOperation(operation.id, {
-            status: "syncing",
-            attempts: operation.attempts + 1,
-        });
-
+        // Note: Status already marked as "syncing" in getNextBatch
         try {
             switch (operation.type) {
                 case "CREATE_TRACKED_ENTITY":

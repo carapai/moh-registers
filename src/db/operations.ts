@@ -393,16 +393,41 @@ export async function queueSyncOperation(
 
 /**
  * Get next pending sync operation (highest priority, oldest first)
+ * Also includes failed operations that haven't exceeded retry limit
  */
 export async function getNextSyncOperation(): Promise<
     SyncOperation | undefined
 > {
-    const operations = await db.syncQueue
+    // Get pending operations
+    const pendingOps = await db.syncQueue
         .where("status")
         .equals("pending")
         .sortBy("priority");
 
-    return operations.reverse()[0]; // Highest priority first
+    // Get failed operations that can be retried (attempts < 3)
+    const failedOps = await db.syncQueue
+        .where("status")
+        .equals("failed")
+        .toArray();
+
+    const now = new Date();
+    const retryableFailedOps = failedOps
+        .filter(op => {
+            if (op.attempts >= 3) return false;
+
+            // Implement exponential backoff: 5s, 15s, 45s
+            const backoffDelay = Math.pow(3, op.attempts) * 5000;
+            const lastAttempt = new Date(op.updatedAt);
+            const timeSinceLastAttempt = now.getTime() - lastAttempt.getTime();
+
+            return timeSinceLastAttempt >= backoffDelay;
+        })
+        .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
+
+    // Combine both, prioritizing pending operations
+    const allOps = [...pendingOps.reverse(), ...retryableFailedOps];
+
+    return allOps[0]; // Highest priority first
 }
 
 /**

@@ -205,7 +205,7 @@ export const DataElementField = React.memo<{
                         dataElement.valueType === "BOOLEAN"
                             ? null
                             : customLabel ||
-                              `${dataElement.formName || dataElement.name}`
+                              `${dataElement.formName || dataElement.name} (${dataElement.id})` 
                     }
                     name={dataElement.id}
                     required={required}

@@ -1,12 +1,9 @@
-import React from "react";
 import { createRoute } from "@tanstack/react-router";
-import { PatientTable } from "../components/patient-table";
-import { ClientSchema, TrackedEntityResponse } from "../schemas";
-import { RootRoute } from "./__root";
-import { Button, Card, Col, Flex, Form, Input, Row, Statistic } from "antd";
 import dayjs from "dayjs";
 import MedicalRegistry from "../components/medical-registry";
 import { resourceQueryOptions } from "../query-options";
+import { ClientSchema, TrackedEntityResponse } from "../schemas";
+import { RootRoute } from "./__root";
 export const TrackedEntitiesRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entities",
@@ -56,6 +53,7 @@ export const TrackedEntitiesRoute = createRoute({
                     orgUnit.id,
                     Array.from(params.values()).sort().join(","),
                 ],
+                refetchInterval: 1 * 60 * 1000,
             }),
         );
         const {
@@ -69,6 +67,7 @@ export const TrackedEntitiesRoute = createRoute({
                     orgUnit.id,
                     Array.from(params2.values()).sort().join(","),
                 ],
+                refetchInterval: 1 * 60 * 1000,
             }),
         );
         const {
@@ -82,6 +81,7 @@ export const TrackedEntitiesRoute = createRoute({
                     orgUnit.id,
                     Array.from(params3.values()).sort().join(","),
                 ],
+                refetchInterval: 1 * 60 * 1000,
             }),
         );
         return { total, enrollments, appointments };

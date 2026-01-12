@@ -680,12 +680,22 @@ export function executeProgramRules({
     };
 
     for (const rule of programRules) {
+        // Skip rules for different programs
         if (rule.program && rule.program.id !== program) {
             continue;
         }
 
-        if (rule.programStage && rule.programStage.id !== programStage) {
-            continue;
+        // Filter rules based on context (registration vs event)
+        if (programStage === undefined) {
+            // Registration context: only apply rules without a programStage
+            if (rule.programStage) {
+                continue;
+            }
+        } else {
+            // Event context: only apply rules for this specific stage or global rules (no programStage)
+            if (rule.programStage && rule.programStage.id !== programStage) {
+                continue;
+            }
         }
         const isTrue = evaluateCondition(rule.condition);
         // console.log(
@@ -697,10 +707,21 @@ export function executeProgramRules({
         }
 
         for (const action of rule.programRuleActions) {
-            const targetId =
-                action.dataElement?.id ||
-                action.trackedEntityAttribute?.id ||
-                "";
+            // Determine target type and ID based on action
+            const isDataElement = !!action.dataElement;
+            const isAttribute = !!action.trackedEntityAttribute;
+            const targetId = action.dataElement?.id || action.trackedEntityAttribute?.id || "";
+
+            // Skip if target type doesn't match context
+            if (programStage === undefined && isDataElement) {
+                // Registration context: skip dataElement targets
+                continue;
+            }
+            if (programStage !== undefined && isAttribute) {
+                // Event context: skip trackedEntityAttribute targets
+                continue;
+            }
+
             switch (action.programRuleActionType) {
                 case "ASSIGN":
                     if (targetId && action.data) {
