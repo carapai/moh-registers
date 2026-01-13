@@ -61,6 +61,7 @@ export interface SyncOperation {
     type:
         | "CREATE_TRACKED_ENTITY"
         | "UPDATE_TRACKED_ENTITY"
+        | "CREATE_RELATIONSHIP"
         | "CREATE_EVENT"
         | "UPDATE_EVENT";
     entityId: string; // TrackedEntity or Event ID

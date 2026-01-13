@@ -43,6 +43,9 @@ import {
     flattenTrackedEntity,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
+import { useAutoSave } from "../hooks/useAutoSave";
+import { getEventDraft } from "../db/operations";
+import { orderBy } from "lodash";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -85,9 +88,6 @@ function TrackedEntity() {
     const dataElementToAttributeMap: Record<string, string> = {
         KJ2V2JlOxFi: "Y3DE5CZWySr",
     };
-
-    // Configuration: Attributes to auto-populate from parent tracked entity
-    // These attributes will be copied from the current patient to the new patient
     const parentAttributesToCopy: string[] = [
         "XjgpfkoxffK",
         "W87HAtUHJjB",
@@ -97,13 +97,7 @@ function TrackedEntity() {
 
     // Configuration: Rename/relabel attributes in the nested modal
     // Use this to change how attribute labels appear (e.g., "First Name" → "Mother's First Name")
-    const attributeLabelOverrides: Record<string, string> = {
-        // Format: 'attributeId': 'New Label'
-        // Example: Change "First Name" to "Mother's First Name"
-        // 'firstNameAttributeId': "Mother's First Name",
-        // 'lastNameAttributeId': "Mother's Last Name",
-        // 'dateOfBirthAttributeId': "Mother's Date of Birth",
-    };
+    const attributeLabelOverrides: Record<string, string> = {};
 
     // Configuration: Populate fields with combined values from multiple sources
     // Just pre-fills the target field - does NOT hide or rename anything
@@ -131,22 +125,22 @@ function TrackedEntity() {
     const [nestedModalKey, setNestedModalKey] = useState(0);
     const [nestedForm] = Form.useForm();
     // const [isUpdatingFromRules, setIsUpdatingFromRules] = useState(false);
-    // const { clearDraft } = useAutoSave({
-    //     form: visitForm,
-    //     draftId: mainEvent.event,
-    //     type: "event",
-    //     interval: 30000,
-    //     enabled: isVisitModalOpen,
-    //     metadata: {
-    //         trackedEntity: enrollment.trackedEntity,
-    //         programStage: "K2nxbE9ubSs",
-    //         enrollment: enrollment.enrollment,
-    //         orgUnit: enrollment.orgUnit,
-    //         program: enrollment.program,
-    //         isNew: !mainEvent.event || mainEvent.event.startsWith("temp"),
-    //     },
-    //     onSave: () => console.log("💾 Visit draft auto-saved"),
-    // });
+    const { clearDraft } = useAutoSave({
+        form: visitForm,
+        draftId: mainEvent.event,
+        type: "event",
+        interval: 30000,
+        enabled: isVisitModalOpen,
+        metadata: {
+            trackedEntity: enrollment.trackedEntity,
+            programStage: "K2nxbE9ubSs",
+            enrollment: enrollment.enrollment,
+            orgUnit: enrollment.orgUnit,
+            program: enrollment.program,
+            isNew: !mainEvent.event || mainEvent.event.startsWith("temp"),
+        },
+        onSave: () => console.log("💾 Visit draft auto-saved"),
+    });
     const onVisitSubmit = (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
             console.error(
@@ -161,7 +155,6 @@ function TrackedEntity() {
         }
         try {
             const { occurredAt, ...dataValues } = values;
-
             const finalValues = {
                 ...dataValues,
                 ...ruleResult.assignments,
@@ -183,8 +176,7 @@ function TrackedEntity() {
                 content: "Visit record saved successfully!",
                 duration: 3,
             });
-            // Clear draft after successful submission
-            // clearDraft();
+            clearDraft();
             visitForm.resetFields();
             trackerActor.send({ type: "RESET_MAIN_EVENT" });
             setIsVisitModalOpen(false);
@@ -204,7 +196,6 @@ function TrackedEntity() {
     };
 
     const showCreateVisitModal = () => {
-        // Reset form and machine state before creating new visit
         visitForm.resetFields();
         trackerActor.send({ type: "RESET_MAIN_EVENT" });
 
@@ -322,25 +313,28 @@ function TrackedEntity() {
                 type: "CREATE_TRACKED_CHILD_ENTITY",
                 trackedEntity: newTrackedEntity,
             });
-            closeNestedModal();
         } catch (error) {
-            console.error("Error creating patient:", error);
+            console.error("Error creating child:", error);
             message.error({
-                content: "Failed to register patient. Please try again.",
+                content: "Failed to register child. Please try again.",
                 duration: 5,
             });
         }
     };
 
-    const handleNestedFormSubmit = async () => {
+    const handleNestedFormSubmit = async (createAnother: boolean = false) => {
         try {
             await nestedForm.validateFields();
             nestedForm.submit();
+            closeNestedModal();
+
+            if (createAnother) {
+                openNestedModal();
+            }
         } catch (error) {
             console.error("Nested form validation failed:", error);
         }
     };
-
     // ✅ OPTIMIZED: Memoized columns prevent Table re-renders
     const columns: TableProps<FlattenedEvent>["columns"] = useMemo(
         () => [
@@ -350,22 +344,22 @@ function TrackedEntity() {
                 key: "date",
                 render: (date) => dayjs(date).format("MMM DD, YYYY"),
             },
-            // {
-            //     title: "Services",
-            //     dataIndex: ["dataValues", "mrKZWf2WMIC"],
-            //     key: "services",
-            //     render: (text) => (
-            //         <Flex gap="small" align="center" wrap>
-            //             {text.split(",").map((tag) => {
-            //                 return (
-            //                     <Tag key={tag} color="blue">
-            //                         {tag.toUpperCase()}
-            //                     </Tag>
-            //                 );
-            //             })}
-            //         </Flex>
-            //     ),
-            // },
+            {
+                title: "Services",
+                dataIndex: ["dataValues", "mrKZWf2WMIC"],
+                key: "services",
+                render: (text) => (
+                    <Flex gap="small" align="center" wrap>
+                        {text.split(",").map((tag) => {
+                            return (
+                                <Tag key={tag} color="blue">
+                                    {tag.toUpperCase()}
+                                </Tag>
+                            );
+                        })}
+                    </Flex>
+                ),
+            },
             {
                 title: "Action",
                 key: "action",
@@ -419,30 +413,51 @@ function TrackedEntity() {
     ]);
 
     useEffect(() => {
-        if (isVisitModalOpen) {
-            trackerActor.send({
-                type: "EXECUTE_PROGRAM_RULES",
-                programRules: programRules,
-                programRuleVariables: programRuleVariables,
-                programStage: mainEvent.programStage,
-                dataValues: mainEvent.dataValues,
-                attributeValues: trackedEntity.attributes,
-            });
-            trackerActor.send({
-                type: "UPDATE_DATA_WITH_ASSIGNMENTS",
-            });
-        }
-    }, [isVisitModalOpen]);
+        const loadDraftIfExists = async () => {
+            if (isVisitModalOpen && mainEvent.event) {
+                // Check if a draft exists for this event
+                const draft = await getEventDraft(mainEvent.event);
 
-    // Initialize form with event data values when modal opens
-    // useEffect(() => {
-    //     if (isVisitModalOpen && mainEvent) {
-    //         visitForm.resetFields();
-    //         visitForm.setFieldsValue();
-    //     }
-    // }, [isVisitModalOpen, mainEvent.event, visitForm]);
+                if (
+                    draft &&
+                    draft.dataValues &&
+                    Object.keys(draft.dataValues).length > 0
+                ) {
+                    // Ask user if they want to restore the draft
+                    Modal.confirm({
+                        title: "Draft Found",
+                        content: `A saved draft was found for this visit (last saved: ${new Date(draft.updatedAt).toLocaleString()}). Would you like to restore it?`,
+                        okText: "Restore Draft",
+                        cancelText: "Start Fresh",
+                        onOk: () => {
+                            // Load draft data into form
+                            visitForm.setFieldsValue(draft.dataValues);
+                            message.success("Draft restored successfully");
+                        },
+                        onCancel: () => {
+                            // User chose to start fresh, do nothing
+                            message.info("Starting with a fresh form");
+                        },
+                    });
+                }
 
-    // Apply program rule assignments to form fields automatically
+                // Execute program rules regardless of draft
+                trackerActor.send({
+                    type: "EXECUTE_PROGRAM_RULES",
+                    programRules: programRules,
+                    programRuleVariables: programRuleVariables,
+                    programStage: mainEvent.programStage,
+                    dataValues: mainEvent.dataValues,
+                    attributeValues: trackedEntity.attributes,
+                });
+                trackerActor.send({
+                    type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+                });
+            }
+        };
+
+        loadDraftIfExists();
+    }, [isVisitModalOpen, mainEvent.event]);
     useEffect(() => {
         if (isVisitModalOpen) {
             if (Object.keys(ruleResult.assignments).length > 0) {
@@ -461,20 +476,16 @@ function TrackedEntity() {
         }
     }, [ruleResult, isVisitModalOpen, visitForm]);
 
-    // Listen for state machine transitions and show appropriate messages
-    // useEffect(() => {
-    //     if (machineState === "entitySuccess") {
-    //         message.success({
-    //             content: "Patient registered successfully!",
-    //             duration: 3,
-    //         });
-    //     } else if (machineState === "failure") {
-    //         message.error({
-    //             content: "Failed to save patient. Please try again.",
-    //             duration: 5,
-    //         });
-    //     }
-    // }, [machineState]);
+    const [activeKey, setActiveKey] = useState<string>(
+        "K2nxbE9ubSs-bnV62fxQmoE",
+    );
+
+    const handleTabChange = (active: string) => {
+        setActiveKey(() => active);
+        if (active === "K2nxbE9ubSs-L4STvAf43r1") {
+        } else if (active === "K2nxbE9ubSs-Su5Ab8A9HCp") {
+        }
+    };
 
     return (
         <>
@@ -516,7 +527,6 @@ function TrackedEntity() {
                                     Add Visit
                                 </Button>
                             }
-                            // styles={{ body: { padding: 0, margin: 0 } }}
                         >
                             <Table
                                 columns={columns}
@@ -717,7 +727,6 @@ function TrackedEntity() {
                     }}
                 >
                     <Flex vertical gap={10} style={{ width: "100%" }}>
-                        {/* Visit Basic Info Card */}
                         <Card
                             size="small"
                             styles={{ body: { padding: 10, margin: 0 } }}
@@ -742,6 +751,7 @@ function TrackedEntity() {
                                         <DatePicker
                                             style={{ width: "100%" }}
                                             placeholder="Select date"
+                                            onChange={handleTriggerProgramRules}
                                         />
                                     </Form.Item>
                                 </Col>
@@ -791,13 +801,12 @@ function TrackedEntity() {
                                                               )
                                                         : false,
                                             }}
+                                            onChange={handleTriggerProgramRules}
                                         />
                                     </Form.Item>
                                 </Col>
                             </Row>
                         </Card>
-
-                        {/* Visit Details Tabs */}
                         <Tabs
                             tabPlacement="start"
                             items={program.programStages.flatMap((stage) => {
@@ -838,190 +847,183 @@ function TrackedEntity() {
                                         ),
                                     };
                                 }
-                                return stage.programStageSections.flatMap(
-                                    (section) => {
-                                        if (
-                                            ruleResult.hiddenSections.has(
-                                                section.id,
-                                            )
+                                return orderBy(
+                                    stage.programStageSections,
+                                    ["sortOrder"],
+                                    ["asc"],
+                                ).flatMap((section) => {
+                                    if (
+                                        ruleResult.hiddenSections.has(
+                                            section.id,
                                         )
-                                            return [];
+                                    )
+                                        return [];
 
-                                        return [
-                                            {
-                                                key: `${stage.id}-${section.id}`,
-                                                label:
-                                                    section.displayName ||
-                                                    section.name,
-                                                children: (
-                                                    <Card>
-                                                        <Row gutter={24}>
-                                                            {section.dataElements.flatMap(
-                                                                (
-                                                                    dataElement,
-                                                                ) => {
-                                                                    const currentDataElement =
-                                                                        dataElements.get(
-                                                                            dataElement.id,
-                                                                        );
-                                                                    const {
-                                                                        compulsory = false,
-                                                                        vertical = false,
-                                                                        renderOptionsAsRadio = false,
-                                                                    } = currentDataElements.get(
+                                    return [
+                                        {
+                                            key: `${stage.id}-${section.id}`,
+                                            label:
+                                                section.displayName ||
+                                                section.name,
+                                            children: (
+                                                <Card>
+                                                    <Row gutter={24}>
+                                                        {section.dataElements.flatMap(
+                                                            (dataElement) => {
+                                                                const currentDataElement =
+                                                                    dataElements.get(
                                                                         dataElement.id,
-                                                                    ) || {};
-
-                                                                    const optionSet =
-                                                                        currentDataElement
-                                                                            ?.optionSet
-                                                                            ?.id ??
-                                                                        "";
-
-                                                                    const hiddenOptions =
-                                                                        ruleResult
-                                                                            .hiddenOptions[
-                                                                            dataElement
-                                                                                .id
-                                                                        ];
-
-                                                                    const shownOptionGroups =
-                                                                        ruleResult
-                                                                            .shownOptionGroups[
-                                                                            dataElement
-                                                                                .id
-                                                                        ] ||
-                                                                        new Set<string>();
-
-                                                                    let finalOptions =
-                                                                        optionSets
-                                                                            .get(
-                                                                                optionSet,
-                                                                            )
-                                                                            ?.flatMap(
-                                                                                (
-                                                                                    o,
-                                                                                ) => {
-                                                                                    if (
-                                                                                        hiddenOptions?.has(
-                                                                                            o.id,
-                                                                                        )
-                                                                                    ) {
-                                                                                        return [];
-                                                                                    }
-                                                                                    return o;
-                                                                                },
-                                                                            );
-
-                                                                    if (
-                                                                        ruleResult.hiddenFields.has(
-                                                                            dataElement.id,
-                                                                        )
-                                                                    ) {
-                                                                        return [];
-                                                                    }
-
-                                                                    if (
-                                                                        shownOptionGroups.size >
-                                                                        0
-                                                                    ) {
-                                                                        const currentOptions =
-                                                                            optionGroups.get(
-                                                                                shownOptionGroups
-                                                                                    .values()
-                                                                                    .next()
-                                                                                    .value,
-                                                                            ) ??
-                                                                            [];
-                                                                        finalOptions =
-                                                                            currentOptions.map(
-                                                                                ({
-                                                                                    code,
-                                                                                    id,
-                                                                                    name,
-                                                                                }) => ({
-                                                                                    id,
-                                                                                    code,
-                                                                                    name,
-                                                                                    optionSet,
-                                                                                }),
-                                                                            );
-                                                                    }
-
-                                                                    const errors =
-                                                                        ruleResult.errors.filter(
-                                                                            (
-                                                                                msg,
-                                                                            ) =>
-                                                                                msg.key ===
-                                                                                dataElement.id,
-                                                                        );
-                                                                    const messages =
-                                                                        ruleResult.messages.filter(
-                                                                            (
-                                                                                msg,
-                                                                            ) =>
-                                                                                msg.key ===
-                                                                                dataElement.id,
-                                                                        );
-                                                                    const warnings =
-                                                                        ruleResult.warnings.filter(
-                                                                            (
-                                                                                msg,
-                                                                            ) =>
-                                                                                msg.key ===
-                                                                                dataElement.id,
-                                                                        );
-
-                                                                    return (
-                                                                        <DataElementField
-                                                                            dataElement={
-                                                                                currentDataElement!
-                                                                            }
-                                                                            hidden={
-                                                                                false
-                                                                            }
-                                                                            renderOptionsAsRadio={
-                                                                                renderOptionsAsRadio
-                                                                            }
-                                                                            vertical={
-                                                                                vertical
-                                                                            }
-                                                                            finalOptions={
-                                                                                finalOptions
-                                                                            }
-                                                                            messages={
-                                                                                messages
-                                                                            }
-                                                                            warnings={
-                                                                                warnings
-                                                                            }
-                                                                            errors={
-                                                                                errors
-                                                                            }
-                                                                            required={
-                                                                                compulsory
-                                                                            }
-                                                                            key={
-                                                                                dataElement.id
-                                                                            }
-                                                                            form={
-                                                                                visitForm
-                                                                            }
-                                                                            onTriggerProgramRules={
-                                                                                handleTriggerProgramRules
-                                                                            }
-                                                                        />
                                                                     );
-                                                                },
-                                                            )}
-                                                        </Row>
-                                                    </Card>
-                                                ),
-                                            },
-                                        ];
-                                    },
-                                );
+                                                                const {
+                                                                    compulsory = false,
+                                                                    vertical = false,
+                                                                    renderOptionsAsRadio = false,
+                                                                } = currentDataElements.get(
+                                                                    dataElement.id,
+                                                                ) || {};
+
+                                                                const optionSet =
+                                                                    currentDataElement
+                                                                        ?.optionSet
+                                                                        ?.id ??
+                                                                    "";
+
+                                                                const hiddenOptions =
+                                                                    ruleResult
+                                                                        .hiddenOptions[
+                                                                        dataElement
+                                                                            .id
+                                                                    ];
+
+                                                                const shownOptionGroups =
+                                                                    ruleResult
+                                                                        .shownOptionGroups[
+                                                                        dataElement
+                                                                            .id
+                                                                    ] ||
+                                                                    new Set<string>();
+
+                                                                let finalOptions =
+                                                                    optionSets
+                                                                        .get(
+                                                                            optionSet,
+                                                                        )
+                                                                        ?.flatMap(
+                                                                            (
+                                                                                o,
+                                                                            ) => {
+                                                                                if (
+                                                                                    hiddenOptions?.has(
+                                                                                        o.id,
+                                                                                    )
+                                                                                ) {
+                                                                                    return [];
+                                                                                }
+                                                                                return o;
+                                                                            },
+                                                                        );
+
+                                                                if (
+                                                                    ruleResult.hiddenFields.has(
+                                                                        dataElement.id,
+                                                                    )
+                                                                ) {
+                                                                    return [];
+                                                                }
+
+                                                                if (
+                                                                    shownOptionGroups.size >
+                                                                    0
+                                                                ) {
+                                                                    const currentOptions =
+                                                                        optionGroups.get(
+                                                                            shownOptionGroups
+                                                                                .values()
+                                                                                .next()
+                                                                                .value,
+                                                                        ) ?? [];
+                                                                    finalOptions =
+                                                                        currentOptions.map(
+                                                                            ({
+                                                                                code,
+                                                                                id,
+                                                                                name,
+                                                                            }) => ({
+                                                                                id,
+                                                                                code,
+                                                                                name,
+                                                                                optionSet,
+                                                                            }),
+                                                                        );
+                                                                }
+
+                                                                const errors =
+                                                                    ruleResult.errors.filter(
+                                                                        (msg) =>
+                                                                            msg.key ===
+                                                                            dataElement.id,
+                                                                    );
+                                                                const messages =
+                                                                    ruleResult.messages.filter(
+                                                                        (msg) =>
+                                                                            msg.key ===
+                                                                            dataElement.id,
+                                                                    );
+                                                                const warnings =
+                                                                    ruleResult.warnings.filter(
+                                                                        (msg) =>
+                                                                            msg.key ===
+                                                                            dataElement.id,
+                                                                    );
+
+                                                                return (
+                                                                    <DataElementField
+                                                                        dataElement={
+                                                                            currentDataElement!
+                                                                        }
+                                                                        hidden={
+                                                                            false
+                                                                        }
+                                                                        renderOptionsAsRadio={
+                                                                            renderOptionsAsRadio
+                                                                        }
+                                                                        vertical={
+                                                                            vertical
+                                                                        }
+                                                                        finalOptions={
+                                                                            finalOptions
+                                                                        }
+                                                                        messages={
+                                                                            messages
+                                                                        }
+                                                                        warnings={
+                                                                            warnings
+                                                                        }
+                                                                        errors={
+                                                                            errors
+                                                                        }
+                                                                        required={
+                                                                            compulsory
+                                                                        }
+                                                                        key={
+                                                                            dataElement.id
+                                                                        }
+                                                                        form={
+                                                                            visitForm
+                                                                        }
+                                                                        onTriggerProgramRules={
+                                                                            handleTriggerProgramRules
+                                                                        }
+                                                                    />
+                                                                );
+                                                            },
+                                                        )}
+                                                    </Row>
+                                                </Card>
+                                            ),
+                                        },
+                                    ];
+                                });
                             })}
                             tabBarStyle={{
                                 background: "#fff",
@@ -1041,6 +1043,8 @@ function TrackedEntity() {
                                     overflow: "auto",
                                 },
                             }}
+                            onChange={handleTabChange}
+                            activeKey={activeKey}
                         />
                     </Flex>
                 </Form>
@@ -1068,7 +1072,7 @@ function TrackedEntity() {
                             <UserAddOutlined style={{ fontSize: 20 }} />
                         </div>
                         <Text strong style={{ fontSize: 18, color: "#1f2937" }}>
-                            Patient Registration
+                            Child Registration
                         </Text>
                     </Flex>
                 }
@@ -1087,7 +1091,7 @@ function TrackedEntity() {
                         </Button>
                         <Button
                             type="primary"
-                            onClick={handleNestedFormSubmit}
+                            onClick={() => handleNestedFormSubmit(false)}
                             style={{
                                 background:
                                     "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
@@ -1098,7 +1102,22 @@ function TrackedEntity() {
                                 paddingRight: 32,
                             }}
                         >
-                            Register Patient
+                            Register Child & Exit
+                        </Button>
+                        <Button
+                            type="primary"
+                            onClick={() => handleNestedFormSubmit(true)}
+                            style={{
+                                background:
+                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                borderColor: "#7c3aed",
+                                borderRadius: 8,
+                                fontWeight: 500,
+                                paddingLeft: 32,
+                                paddingRight: 32,
+                            }}
+                        >
+                            Register Child & Add Another
                         </Button>
                     </Flex>
                 }

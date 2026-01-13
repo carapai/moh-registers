@@ -16,9 +16,10 @@ const { Title, Text } = Typography;
 import { Flex } from "antd";
 import useApp from "antd/es/app/useApp";
 import { groupBy } from "lodash";
+import { DraftRecovery } from "../components/draft-recovery";
 import { SyncErrorBoundary } from "../components/sync-error-boundary";
 import { SyncStatus } from "../components/sync-status";
-import { db } from "../db";
+import { db, type EventDraft, type TrackedEntityDraft } from "../db";
 import { createSyncManager } from "../db/sync";
 import { TrackerContext } from "../machines/tracker";
 import { resourceQueryOptions } from "../query-options";
@@ -232,6 +233,152 @@ export const RootRoute = createRootRouteWithContext<{
     },
 });
 
+function LayoutWithDrafts({
+    orgUnit,
+    draftModalVisible,
+    setDraftModalVisible
+}: {
+    orgUnit: OrgUnit;
+    draftModalVisible: boolean;
+    setDraftModalVisible: (visible: boolean) => void;
+}) {
+    const { message } = useApp();
+    const navigate = RootRoute.useNavigate();
+    const trackerActor = TrackerContext.useActorRef();
+
+    /**
+     * Handle draft recovery
+     * Loads draft data into state machine and navigates to appropriate route
+     */
+    const handleDraftRecover = (draft: EventDraft | TrackedEntityDraft, type: "event" | "trackedEntity") => {
+        try {
+            if (type === "event") {
+                const eventDraft = draft as EventDraft;
+
+                // Load draft into state machine
+                trackerActor.send({
+                    type: "SET_MAIN_EVENT",
+                    mainEvent: {
+                        event: eventDraft.event,
+                        programStage: eventDraft.programStage,
+                        trackedEntity: eventDraft.trackedEntity,
+                        enrollment: eventDraft.enrollment,
+                        dataValues: eventDraft.dataValues,
+                        occurredAt: eventDraft.occurredAt,
+                        orgUnit: eventDraft.orgUnit,
+                        program: eventDraft.program,
+                        status: "ACTIVE",
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                    },
+                });
+
+                // Navigate to tracked entity page
+                navigate({
+                    to: "/tracked-entity/$trackedEntity",
+                    params: { trackedEntity: eventDraft.trackedEntity },
+                });
+
+                message.success("Draft loaded successfully. You can continue editing.");
+            } else {
+                const trackedEntityDraft = draft as TrackedEntityDraft;
+
+                // Load draft into state machine
+                trackerActor.send({
+                    type: "SET_TRACKED_ENTITY",
+                    trackedEntity: {
+                        trackedEntity: trackedEntityDraft.id,
+                        attributes: trackedEntityDraft.attributes,
+                        enrollment: trackedEntityDraft.enrollment,
+                        events: [],
+                        orgUnit: trackedEntityDraft.orgUnit,
+                        program: trackedEntityDraft.program,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                    },
+                });
+
+                // Stay on home page or navigate to registration
+                message.success("Registration draft loaded. You can continue editing.");
+            }
+
+            setDraftModalVisible(false);
+        } catch (error) {
+            console.error("Failed to recover draft:", error);
+            message.error("Failed to load draft. Please try again.");
+        }
+    };
+
+    return (
+        <>
+            <Layout
+                style={{
+                    minHeight: "calc(100vh - 48px)",
+                    background: "#f0f2f5",
+                }}
+            >
+                <Header
+                    style={{
+                        background: "#fff",
+                        padding: "0 16px",
+                        display: "flex",
+                        alignItems: "center",
+                        alignContent: "center",
+                        justifyItems: "center",
+                        justifyContent: "space-between",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                    }}
+                >
+                    <Flex align="center" gap="large">
+                        <img
+                            src="https://upload.wikimedia.org/wikipedia/commons/7/7c/Coat_of_arms_of_Uganda.svg"
+                            alt="Uganda Coat of Arms"
+                            style={{ height: 54 }}
+                        />
+                        <Title
+                            level={3}
+                            style={{ margin: 0, color: "#1f4788" }}
+                        >
+                            Medical{" "}
+                            <Text style={{ fontWeight: 300 }}>
+                                eRegistry
+                            </Text>
+                        </Title>
+                    </Flex>
+
+                    <Space>
+                        <HomeOutlined
+                            style={{ fontSize: 20, color: "#1890ff" }}
+                        />
+                        <Text strong>{orgUnit.name}</Text>
+                        <Button type="text" icon={<MoreOutlined />} />
+                        <Tooltip title="Recover saved drafts">
+                            <Button
+                                icon={<FileTextOutlined />}
+                                onClick={() => {
+                                    console.log("Drafts button clicked, opening modal");
+                                    setDraftModalVisible(true);
+                                }}
+                            >
+                                Drafts
+                            </Button>
+                        </Tooltip>
+                        <SyncStatus />
+                    </Space>
+                </Header>
+
+                <Outlet />
+            </Layout>
+
+            <DraftRecovery
+                visible={draftModalVisible}
+                onClose={() => setDraftModalVisible(false)}
+                onRecover={handleDraftRecover}
+            />
+        </>
+    );
+}
+
 function RootRouteComponent() {
     const { engine, orgUnit } = RootRoute.useRouteContext();
     const { message } = useApp();
@@ -263,61 +410,11 @@ function RootRouteComponent() {
                     },
                 }}
             >
-                <Layout
-                    style={{
-                        minHeight: "calc(100vh - 48px)",
-                        background: "#f0f2f5",
-                    }}
-                >
-                    <Header
-                        style={{
-                            background: "#fff",
-                            padding: "0 16px",
-                            display: "flex",
-                            alignItems: "center",
-                            alignContent: "center",
-                            justifyItems: "center",
-                            justifyContent: "space-between",
-                            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-                        }}
-                    >
-                        <Flex align="center" gap="large">
-                            <img
-                                src="https://upload.wikimedia.org/wikipedia/commons/7/7c/Coat_of_arms_of_Uganda.svg"
-                                alt="Uganda Coat of Arms"
-                                style={{ height: 54 }}
-                            />
-                            <Title
-                                level={3}
-                                style={{ margin: 0, color: "#1f4788" }}
-                            >
-                                Medical{" "}
-                                <Text style={{ fontWeight: 300 }}>
-                                    eRegistry
-                                </Text>
-                            </Title>
-                        </Flex>
-
-                        <Space>
-                            <HomeOutlined
-                                style={{ fontSize: 20, color: "#1890ff" }}
-                            />
-                            <Text strong>{orgUnit.name}</Text>
-                            <Button type="text" icon={<MoreOutlined />} />
-                            <Tooltip title="Recover saved drafts">
-                                <Button
-                                    icon={<FileTextOutlined />}
-                                    onClick={() => setDraftModalVisible(true)}
-                                >
-                                    Drafts
-                                </Button>
-                            </Tooltip>
-                            <SyncStatus />
-                        </Space>
-                    </Header>
-
-                    <Outlet />
-                </Layout>
+                <LayoutWithDrafts
+                    orgUnit={orgUnit}
+                    draftModalVisible={draftModalVisible}
+                    setDraftModalVisible={setDraftModalVisible}
+                />
             </TrackerContext.Provider>
         </SyncErrorBoundary>
     );

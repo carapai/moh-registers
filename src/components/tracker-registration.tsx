@@ -14,14 +14,17 @@ import { TrackerContext } from "../machines/tracker";
 import { DataElementField } from "./data-element-field";
 import { RootRoute } from "../routes/__root";
 import { flattenTrackedEntity } from "../utils/utils";
+import { getTrackedEntityDraft } from "../db/operations";
+import { useAutoSave } from "../hooks/useAutoSave";
 
 const { Text } = Typography;
 
 const spans = new Map<string, number>([
-    ["XjgpfkoxffK", 5],
-    ["W87HAtUHJjB", 5],
-    ["PKuyTiVCR89", 5],
-    ["oTI0DLitzFY", 9],
+    ["XjgpfkoxffK", 4],
+    ["rN2iZ0q1NWV", 4],
+    ["W87HAtUHJjB", 4],
+    ["PKuyTiVCR89", 4],
+    ["oTI0DLitzFY", 8],
 ]);
 
 export const TrackerRegistration: React.FC = () => {
@@ -51,6 +54,22 @@ export const TrackerRegistration: React.FC = () => {
     const machineState = TrackerContext.useSelector((state) => state.value);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
+    // Auto-save registration drafts
+    const { clearDraft } = useAutoSave({
+        form: form,
+        draftId: trackedEntity.trackedEntity || "temp-registration",
+        type: "trackedEntity",
+        interval: 30000, // 30 seconds
+        enabled: isVisitModalOpen,
+        metadata: {
+            orgUnit: trackedEntity.orgUnit || "",
+            program: program.id,
+            enrollment: trackedEntity.enrollment?.enrollment || "",
+            isNew: !trackedEntity.trackedEntity || trackedEntity.trackedEntity.startsWith("temp"),
+        },
+        onSave: () => console.log("💾 Registration draft auto-saved"),
+    });
+
     const fields = useMemo(() => {
         return Object.entries(trackedEntity.attributes || {}).map(
             ([name, value]) => ({
@@ -75,18 +94,45 @@ export const TrackerRegistration: React.FC = () => {
     }, [form, trackerActor, programRules, programRuleVariables]);
 
     useEffect(() => {
-        if (isVisitModalOpen) {
-            trackerActor.send({
-                type: "EXECUTE_PROGRAM_RULES",
-                attributeValues: trackedEntity.attributes,
-                programRules: programRules,
-                programRuleVariables: programRuleVariables,
-            });
-            trackerActor.send({
-                type: "UPDATE_DATA_WITH_ASSIGNMENTS",
-            });
-        }
-    }, [isVisitModalOpen]);
+        const loadDraftIfExists = async () => {
+            if (isVisitModalOpen && trackedEntity.trackedEntity) {
+                // Check if a draft exists for this tracked entity
+                const draft = await getTrackedEntityDraft(trackedEntity.trackedEntity);
+
+                if (draft && draft.attributes && Object.keys(draft.attributes).length > 0) {
+                    // Ask user if they want to restore the draft
+                    Modal.confirm({
+                        title: "Draft Found",
+                        content: `A saved registration draft was found (last saved: ${new Date(draft.updatedAt).toLocaleString()}). Would you like to restore it?`,
+                        okText: "Restore Draft",
+                        cancelText: "Start Fresh",
+                        onOk: () => {
+                            // Load draft data into form
+                            form.setFieldsValue(draft.attributes);
+                            message.success("Draft restored successfully");
+                        },
+                        onCancel: () => {
+                            // User chose to start fresh, do nothing
+                            message.info("Starting with a fresh form");
+                        },
+                    });
+                }
+
+                // Execute program rules regardless of draft
+                trackerActor.send({
+                    type: "EXECUTE_PROGRAM_RULES",
+                    attributeValues: trackedEntity.attributes,
+                    programRules: programRules,
+                    programRuleVariables: programRuleVariables,
+                });
+                trackerActor.send({
+                    type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+                });
+            }
+        };
+
+        loadDraftIfExists();
+    }, [isVisitModalOpen, trackedEntity.trackedEntity]);
 
     // Apply assignments when rule results change
     useEffect(() => {
@@ -103,6 +149,8 @@ export const TrackerRegistration: React.FC = () => {
                 content: "Patient registered successfully!",
                 duration: 3,
             });
+            // Clear draft after successful save
+            clearDraft();
             setIsSubmitting(false);
         } else if (machineState === "failure" && isSubmitting) {
             message.error({
@@ -111,7 +159,7 @@ export const TrackerRegistration: React.FC = () => {
             });
             setIsSubmitting(false);
         }
-    }, [machineState, isSubmitting]);
+    }, [machineState, isSubmitting, clearDraft]);
 
     const onStageSubmit = (values: any) => {
         if (ruleResult.errors.length > 0) {
@@ -137,7 +185,6 @@ export const TrackerRegistration: React.FC = () => {
             });
             // Success message will be shown after state machine confirms save
             setIsVisitModalOpen(false);
-            // ✅ Machine will automatically navigate to patient detail page
         } catch (error) {
             console.error("Error creating patient:", error);
             message.error({

@@ -278,6 +278,7 @@ export const TrackedEntitySchema = z.object({
             }),
         )
         .optional(),
+    relationships: z.array(z.unknown()).optional(),
 });
 
 export const TrackedEntityResponseSchema = z.object({

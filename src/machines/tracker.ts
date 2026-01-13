@@ -58,6 +58,7 @@ type TrackerEvents =
     | {
           type: "CREATE_TRACKED_CHILD_ENTITY";
           trackedEntity: FlattenedTrackedEntity;
+          relationship?: any;
       }
     | {
           type: "SET_TRACKED_ENTITY";
@@ -211,13 +212,13 @@ export const trackerMachine = setup({
             {
                 syncManager?: SyncManager;
                 trackedEntity: FlattenedTrackedEntity;
+                relationship?: any;
             }
         >(async ({ input: { syncManager, trackedEntity } }) => {
             await saveTrackedEntity(trackedEntity);
             if (syncManager) {
                 await syncManager.queueCreateTrackedEntity(trackedEntity, 8);
             }
-
             return trackedEntity;
         }),
     },
@@ -500,6 +501,7 @@ export const trackerMachine = setup({
                 attributeValues: event.attributeValues,
                 programStage: event.programStage,
                 program: "ueBhWkWll5v",
+                enrollment: context.trackedEntity.enrollment,
             });
 
             // Route results based on programStage context, not just attributeValues presence
@@ -933,7 +935,11 @@ export const trackerMachine = setup({
                 src: "createOrUpdateTrackedEntity",
                 input: ({ context: { syncManager }, event }) => {
                     assertEvent(event, "CREATE_TRACKED_CHILD_ENTITY");
-                    return { syncManager, trackedEntity: event.trackedEntity };
+                    return {
+                        syncManager,
+                        trackedEntity: event.trackedEntity,
+                        relationship: event.relationship,
+                    };
                 },
                 onDone: {
                     actions: "showSuccessNotification",

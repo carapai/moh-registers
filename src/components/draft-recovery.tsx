@@ -64,6 +64,7 @@ export const DraftRecovery: React.FC<DraftRecoveryProps> = ({
      * Load all drafts from IndexedDB
      */
     const loadDrafts = async () => {
+        console.log("📥 Starting to load drafts...");
         setLoading(true);
         try {
             // ✅ FIX: Functions now return { drafts, total } instead of arrays
@@ -71,6 +72,9 @@ export const DraftRecovery: React.FC<DraftRecoveryProps> = ({
                 getAllEventDrafts(),
                 getAllTrackedEntityDrafts(),
             ]);
+
+            console.log("📊 Event drafts:", eventDraftsResult.drafts.length);
+            console.log("📊 Tracked entity drafts:", trackedEntityDraftsResult.drafts.length);
 
             const allDrafts: DraftItem[] = [
                 ...eventDraftsResult.drafts.map((draft) => ({
@@ -95,6 +99,7 @@ export const DraftRecovery: React.FC<DraftRecoveryProps> = ({
                     new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
             );
 
+            console.log("✅ Total drafts loaded:", allDrafts.length);
             setDrafts(allDrafts);
         } catch (error) {
             console.error("❌ Failed to load drafts:", error);
@@ -135,7 +140,9 @@ export const DraftRecovery: React.FC<DraftRecoveryProps> = ({
      * Load drafts when modal opens
      */
     useEffect(() => {
+        console.log("DraftRecovery modal visible state changed:", visible);
         if (visible) {
+            console.log("Loading drafts...");
             loadDrafts();
         }
     }, [visible]);
@@ -188,6 +195,8 @@ export const DraftRecovery: React.FC<DraftRecoveryProps> = ({
                 </Button>,
             ]}
             width={600}
+            data-testid="draft-recovery-modal"
+            style={{ zIndex: 9999 }}
         >
             {drafts.length === 0 ? (
                 <Empty

@@ -241,11 +241,22 @@ export class SyncManager {
                         op.type === "CREATE_TRACKED_ENTITY" ||
                         op.type === "UPDATE_TRACKED_ENTITY",
                 );
+                const relationshipOps = batch.filter(
+                    (op) => op.type === "CREATE_RELATIONSHIP",
+                );
 
                 try {
                     // Batch events together (most common operation)
                     if (eventOps.length > 0) {
                         await this.processBatchedEvents(eventOps);
+                        for (const op of eventOps) {
+                            await deleteSyncOperation(op.id);
+                            syncedCount++;
+                        }
+                    }
+
+                    if (relationshipOps.length > 0) {
+                        await this.processBatchedRelationships(relationshipOps);
                         for (const op of eventOps) {
                             await deleteSyncOperation(op.id);
                             syncedCount++;
@@ -378,6 +389,22 @@ export class SyncManager {
         );
     }
 
+    private async processBatchedRelationships(
+        operations: SyncOperation[],
+    ): Promise<void> {
+        const relationships = operations.map((op) => op.data);
+        await this.engine.mutate({
+            resource: "tracker",
+            type: "create",
+            data: { relationships },
+            params: { async: false },
+        });
+
+        console.log(
+            `✅ Batched ${operations.length} events synced successfully`,
+        );
+    }
+
     /**
      * Process a single sync operation
      */
@@ -385,8 +412,6 @@ export class SyncManager {
         operation: SyncOperation,
     ): Promise<void> {
         console.log(`🔄 Processing: ${operation.type} - ${operation.entityId}`);
-
-        // Note: Status already marked as "syncing" in getNextBatch
         try {
             switch (operation.type) {
                 case "CREATE_TRACKED_ENTITY":
@@ -403,6 +428,9 @@ export class SyncManager {
 
                 case "UPDATE_EVENT":
                     await this.syncUpdateEvent(operation.data);
+                    break;
+                case "CREATE_RELATIONSHIP":
+                    await this.syncCreateRelationship(operation.data);
                     break;
 
                 default:
@@ -456,6 +484,14 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: { trackedEntities, enrollments },
+            params: { async: false },
+        });
+    }
+    private async syncCreateRelationship(relationships: any): Promise<void> {
+        await this.engine.mutate({
+            resource: "tracker",
+            type: "create",
+            data: { relationships },
             params: { async: false },
         });
     }
@@ -567,7 +603,6 @@ export class SyncManager {
         data: any,
         priority: number = 5,
     ): Promise<void> {
-        // Check if already queued
         const exists = await this.operationExists(
             data.trackedEntity,
             "CREATE_TRACKED_ENTITY",
@@ -588,8 +623,6 @@ export class SyncManager {
         });
 
         this.notifyListeners();
-
-        // Trigger immediate sync if online
         if (this.isOnline && !this.isSyncing) {
             this.startSync();
         }
@@ -614,6 +647,38 @@ export class SyncManager {
         await queueSyncOperation({
             type: "CREATE_EVENT",
             entityId: data.event,
+            data,
+            priority,
+        });
+
+        this.notifyListeners();
+
+        // Trigger immediate sync if online
+        if (this.isOnline && !this.isSyncing) {
+            this.startSync();
+        }
+    }
+
+    public async queueCreateRelationship(
+        data: any,
+        priority: number = 5,
+    ): Promise<void> {
+        // Check if already queued
+        const exists = await this.operationExists(
+            data.relationship,
+            "CREATE_RELATIONSHIP",
+        );
+
+        if (exists) {
+            console.log(
+                `⏭️  Skipping duplicate: CREATE_RELATIONSHIP - ${data.relationship}`,
+            );
+            return;
+        }
+
+        await queueSyncOperation({
+            type: "CREATE_RELATIONSHIP",
+            entityId: data.relationship,
             data,
             priority,
         });

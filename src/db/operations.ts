@@ -412,7 +412,7 @@ export async function getNextSyncOperation(): Promise<
 
     const now = new Date();
     const retryableFailedOps = failedOps
-        .filter(op => {
+        .filter((op) => {
             if (op.attempts >= 3) return false;
 
             // Implement exponential backoff: 5s, 15s, 45s
@@ -422,7 +422,11 @@ export async function getNextSyncOperation(): Promise<
 
             return timeSinceLastAttempt >= backoffDelay;
         })
-        .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
+        .sort(
+            (a, b) =>
+                b.priority - a.priority ||
+                a.createdAt.localeCompare(b.createdAt),
+        );
 
     // Combine both, prioritizing pending operations
     const allOps = [...pendingOps.reverse(), ...retryableFailedOps];

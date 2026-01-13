@@ -51,7 +51,6 @@ export const DataElementField = React.memo<{
         onTriggerProgramRules,
     }) => {
         if (hidden) return null;
-
         // Determine if this field should trigger rules on blur or change
         const isTextInput =
             !dataElement.optionSetValue &&
@@ -194,8 +193,8 @@ export const DataElementField = React.memo<{
             <Col
                 key={dataElement.id}
                 sm={{ span: 24 }}
-                md={{ span: 24 }}
-                lg={{ span }}
+                md={{ span: 12 }}
+                lg={{ span: 8 }}
                 xs={{ span: 24 }}
                 xl={{ span }}
             >
@@ -205,7 +204,7 @@ export const DataElementField = React.memo<{
                         dataElement.valueType === "BOOLEAN"
                             ? null
                             : customLabel ||
-                              `${dataElement.formName || dataElement.name} (${dataElement.id})` 
+                              `${dataElement.formName || dataElement.name}`
                     }
                     name={dataElement.id}
                     required={required}

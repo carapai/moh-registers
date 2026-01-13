@@ -23,17 +23,14 @@ export const flattenTrackedEntity = ({
     enrollments,
     ...rest
 }: TrackedEntity) => {
-    // ✅ FIX: Add null safety for attributes
     const trackedEntityAttributes = (attributes || []).reduce((acc, attr) => {
         acc[attr.attribute] = attr.value;
         return acc;
     }, {});
 
-    // ✅ FIX: Add null safety for enrollments
     const [{ events, attributes: eAttributes, ...enrollmentDetails }] =
         enrollments;
 
-    // ✅ FIX: Add null safety for enrollment attributes
     const enrollmentAttrs: Record<string, string> = (eAttributes || []).reduce(
         (acc, attr) => {
             acc[attr.attribute] = attr.value;
@@ -41,15 +38,6 @@ export const flattenTrackedEntity = ({
         },
         {},
     );
-
-    // console.log("🔄 flattenTrackedEntity:", {
-    //     trackedEntity,
-    //     attributes,
-    //     enrollments,
-    //     events,
-    // });
-
-    // ✅ FIX: Add null safety for events and dataValues
     const flattenedEvents = (events || []).map((event) => {
         const eventAttrs: Record<string, string> = (
             event.dataValues || []
@@ -98,6 +86,7 @@ export function executeProgramRules({
     attributeValues = {},
     program,
     programStage,
+    enrollment,
 }: {
     programRules: ProgramRule[];
     programRuleVariables: ProgramRuleVariable[];
@@ -105,6 +94,7 @@ export function executeProgramRules({
     attributeValues?: Record<string, any>;
     programStage?: string;
     program?: string;
+    enrollment?: { enrolledAt?: string; occurredAt?: string };
 }): ProgramRuleResult {
     const variableValues: Record<string, any> = {};
 
@@ -112,18 +102,18 @@ export function executeProgramRules({
     variableValues["current_date"] = dayjs().format("YYYY-MM-DD");
     variableValues["event_date"] =
         dataValues?.occurredAt || dayjs().format("YYYY-MM-DD");
-    variableValues["event_count"] = 1; // Could be calculated from events array if available
+    variableValues["enrollment_date"] =
+        enrollment?.enrolledAt || enrollment?.occurredAt;
+    variableValues["event_count"] = 1;
 
     for (const variable of programRuleVariables) {
         let value: any = null;
-        // Check for data element
         if (
             variable.dataElement &&
             dataValues?.hasOwnProperty(variable.dataElement.id)
         ) {
             value = dataValues[variable.dataElement.id];
         }
-        // Check for tracked entity attribute
         else if (
             variable.trackedEntityAttribute &&
             attributeValues?.hasOwnProperty(variable.trackedEntityAttribute.id)
@@ -139,7 +129,6 @@ export function executeProgramRules({
         variableValues[variable.name] = value ?? null;
     }
 
-    console.log("🔢 Program Rule Variable Values:", variableValues);
     // D2 function implementations
     const d2Functions = {
         hasValue: (varName: string): boolean => {
@@ -318,7 +307,6 @@ export function executeProgramRules({
         },
 
         inOrgUnitGroup: (groupId: string): boolean => {
-            console.warn("inOrgUnitGroup not fully implemented");
             return false;
         },
     };
@@ -710,7 +698,10 @@ export function executeProgramRules({
             // Determine target type and ID based on action
             const isDataElement = !!action.dataElement;
             const isAttribute = !!action.trackedEntityAttribute;
-            const targetId = action.dataElement?.id || action.trackedEntityAttribute?.id || "";
+            const targetId =
+                action.dataElement?.id ||
+                action.trackedEntityAttribute?.id ||
+                "";
 
             // Skip if target type doesn't match context
             if (programStage === undefined && isDataElement) {
