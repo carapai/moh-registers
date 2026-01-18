@@ -678,9 +678,9 @@ export function executeProgramRules({
             }
         }
         const isTrue = evaluateCondition(rule.condition);
-        // console.log(
-        //     `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
-        // );
+        console.log(
+            `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
+        );
         if (!isTrue) {
             continue;
         }

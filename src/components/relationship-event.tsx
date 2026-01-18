@@ -120,7 +120,6 @@ export default function RelationshipEvent({ section }: { section: string }) {
                             occurredAt: childEvent.occurredAt,
                         }}
                     >
-                        <pre>{JSON.stringify(childEvent, null, 2)}</pre>
                         <Row gutter={24}>
                             {currentSection.dataElements.flatMap(
                                 (dataElement) => {

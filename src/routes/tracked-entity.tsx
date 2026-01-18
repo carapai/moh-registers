@@ -145,6 +145,9 @@ function TrackedEntity() {
     const [visitForm] = Form.useForm();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState<string>("");
+    const [currentVisitDate, setCurrentVisitDate] = useState<string | null>(
+        null,
+    );
     const [isNestedModalOpen, setIsNestedModalOpen] = useState(false);
     const [nestedModalKey, setNestedModalKey] = useState(0);
     const [nestedForm] = Form.useForm();
@@ -459,10 +462,27 @@ function TrackedEntity() {
         programRules,
         programRuleVariables,
         trackedEntity.attributes,
+        mainEvent.programStage,
+        trackedEntity.enrollment,
     ]);
 
     useEffect(() => {
         const loadDraftIfExists = async () => {
+            if (!isVisitModalOpen) return;
+
+            // Reset form completely first to clear any previous data
+            visitForm.resetFields();
+
+            // Set initial visit date in state
+            setCurrentVisitDate(mainEvent.occurredAt || null);
+
+            // Then set only the mainEvent data
+            const initialFormValues = {
+                ...mainEvent.dataValues,
+                occurredAt: mainEvent.occurredAt,
+            };
+            visitForm.setFieldsValue(initialFormValues);
+
             // Check if a draft exists for this event
             const draft = await getEventDraft(mainEvent.event);
             if (
@@ -480,26 +500,53 @@ function TrackedEntity() {
                         // Load draft data into form
                         visitForm.setFieldsValue(draft.dataValues);
                         message.success("Draft restored successfully");
+                        // Execute program rules with draft data
+                        trackerActor.send({
+                            type: "EXECUTE_PROGRAM_RULES",
+                            programRules: programRules,
+                            programRuleVariables: programRuleVariables,
+                            programStage: mainEvent.programStage,
+                            dataValues: { ...initialFormValues, ...draft.dataValues },
+                            attributeValues: trackedEntity.attributes,
+                            ruleResultKey: "mainEventRuleResults",
+                            enrollment: trackedEntity.enrollment,
+                            ruleResultUpdateKey: "mainEvent",
+                            updateKey: "dataValues",
+                        });
                     },
                     onCancel: () => {
                         // User chose to start fresh, do nothing
                         message.info("Starting with a fresh form");
+                        // Execute program rules with initial data
+                        trackerActor.send({
+                            type: "EXECUTE_PROGRAM_RULES",
+                            programRules: programRules,
+                            programRuleVariables: programRuleVariables,
+                            programStage: mainEvent.programStage,
+                            dataValues: initialFormValues,
+                            attributeValues: trackedEntity.attributes,
+                            ruleResultKey: "mainEventRuleResults",
+                            enrollment: trackedEntity.enrollment,
+                            ruleResultUpdateKey: "mainEvent",
+                            updateKey: "dataValues",
+                        });
                     },
                 });
+            } else {
+                // No draft, execute program rules with initial data
+                trackerActor.send({
+                    type: "EXECUTE_PROGRAM_RULES",
+                    programRules: programRules,
+                    programRuleVariables: programRuleVariables,
+                    programStage: mainEvent.programStage,
+                    dataValues: initialFormValues,
+                    attributeValues: trackedEntity.attributes,
+                    ruleResultKey: "mainEventRuleResults",
+                    enrollment: trackedEntity.enrollment,
+                    ruleResultUpdateKey: "mainEvent",
+                    updateKey: "dataValues",
+                });
             }
-            // Execute program rules regardless of draft
-            trackerActor.send({
-                type: "EXECUTE_PROGRAM_RULES",
-                programRules: programRules,
-                programRuleVariables: programRuleVariables,
-                programStage: mainEvent.programStage,
-                dataValues: mainEvent.dataValues,
-                attributeValues: trackedEntity.attributes,
-                ruleResultKey: "mainEventRuleResults",
-                enrollment: trackedEntity.enrollment,
-                ruleResultUpdateKey: "mainEvent",
-                updateKey: "dataValues",
-            });
         };
         loadDraftIfExists();
     }, [isVisitModalOpen, mainEvent.event]);
@@ -712,10 +759,10 @@ function TrackedEntity() {
                                 style={{ color: "#7c3aed", fontSize: 16 }}
                             />
                             <Text type="secondary" style={{ fontSize: 14 }}>
-                                Visit Date:
+                                Visit Date:{" "}
                                 <Text strong>
-                                    {mainEvent.occurredAt
-                                        ? dayjs(mainEvent.occurredAt).format(
+                                    {currentVisitDate
+                                        ? dayjs(currentVisitDate).format(
                                               "MMM DD, YYYY",
                                           )
                                         : "Not set"}
@@ -796,7 +843,18 @@ function TrackedEntity() {
                                         <DatePicker
                                             style={{ width: "100%" }}
                                             placeholder="Select date"
-                                            onChange={handleTriggerProgramRules}
+                                            onChange={(date) => {
+                                                if (date) {
+                                                    setCurrentVisitDate(
+                                                        date.format(
+                                                            "YYYY-MM-DD",
+                                                        ),
+                                                    );
+                                                } else {
+                                                    setCurrentVisitDate(null);
+                                                }
+                                                handleTriggerProgramRules();
+                                            }}
                                         />
                                     </Form.Item>
                                 </Col>
