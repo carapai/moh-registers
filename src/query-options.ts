@@ -36,3 +36,29 @@ export const resourceQueryOptions = <T>({
         refetchInterval,
     });
 };
+
+export const resourcesQueryOptions = ({
+    engine,
+    queries,
+    refetchInterval,
+}: {
+    engine: ReturnType<typeof useDataEngine>;
+    queries: Record<
+        string,
+        {
+            resource: string;
+            params?: Record<string, any>;
+            id?: string;
+        }
+    >;
+    refetchInterval?: number;
+}) => {
+    return queryOptions({
+        queryKey: Object.keys(queries),
+        queryFn: async () => {
+            const response = await engine.query(queries);
+            return Object.keys(queries).map((k) => response[k]);
+        },
+        refetchInterval,
+    });
+};

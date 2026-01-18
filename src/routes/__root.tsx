@@ -19,16 +19,17 @@ import { groupBy } from "lodash";
 import { DraftRecovery } from "../components/draft-recovery";
 import { SyncErrorBoundary } from "../components/sync-error-boundary";
 import { SyncStatus } from "../components/sync-status";
-import { db, type EventDraft, type TrackedEntityDraft } from "../db";
+import { db, FlattenedTrackedEntity, Village } from "../db";
 import { createSyncManager } from "../db/sync";
 import { TrackerContext } from "../machines/tracker";
-import { resourceQueryOptions } from "../query-options";
+import { resourcesQueryOptions } from "../query-options";
 import {
     DataElement,
     OrgUnit,
     Program,
     ProgramRule,
     ProgramRuleVariable,
+    RelationshipType,
     TrackedEntityAttribute,
 } from "../schemas";
 
@@ -47,6 +48,7 @@ export const RootRoute = createRootRouteWithContext<{
         const prevOptionSets = await db.optionSets.count();
         const prevPrograms = await db.programs.count();
         const prevVillages = await db.villages.count();
+        const prevRelationshipTypes = await db.relationshipTypes.count();
 
         if (
             prevDataElements === 0 ||
@@ -56,90 +58,102 @@ export const RootRoute = createRootRouteWithContext<{
             prevOptionGroups === 0 ||
             prevOptionSets === 0 ||
             prevPrograms === 0 ||
-            prevVillages === 0
+            prevVillages === 0 ||
+            prevRelationshipTypes === 0
         ) {
-            const villages = await queryClient.ensureQueryData(
-                resourceQueryOptions<any>({
+            const [
+                villages,
+                program,
+                { optionSets },
+                { dataElements },
+                { trackedEntityAttributes },
+                { programRules },
+                { programRuleVariables },
+                { optionGroups },
+                relationshipType,
+            ] = (await queryClient.ensureQueryData(
+                resourcesQueryOptions({
                     engine,
-                    resource: "dataStore/registers",
-                    id: "villages",
-                }),
-            );
-            const program = await queryClient.ensureQueryData(
-                resourceQueryOptions<Program>({
-                    engine,
-                    resource: "programs",
-                    id: "ueBhWkWll5v",
-                    params: {
-                        fields: "id,name,programSections[id,name,sortOrder,trackedEntityAttributes[id]],trackedEntityType[id,trackedEntityTypeAttributes[id]],programType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,name,code,programStageDataElements[id,compulsory,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,dataElements[id]]],programTrackedEntityAttributes[id,mandatory,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id]]",
+                    queries: {
+                        villages: {
+                            resource: "dataStore/registers",
+                            id: "villages",
+                        },
+                        program: {
+                            resource: "programs",
+                            id: "ueBhWkWll5v",
+                            params: {
+                                fields: "id,name,programSections[id,name,sortOrder,trackedEntityAttributes[id]],trackedEntityType[id,trackedEntityTypeAttributes[id]],programType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,name,code,programStageDataElements[id,compulsory,renderOptionsAsRadio,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,dataElements[id]]],programTrackedEntityAttributes[id,mandatory,searchable,renderOptionsAsRadio,renderType,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id]]",
+                            },
+                        },
+                        optionSets: {
+                            resource: "optionSets",
+                            params: {
+                                fields: "id,options[id,name,code]",
+                                paging: false,
+                            },
+                        },
+                        dataElements: {
+                            resource: "dataElements",
+                            params: {
+                                fields: "id,name,code,valueType,formName,optionSetValue,optionSet[id]",
+                                paging: false,
+                            },
+                        },
+                        trackedEntityAttributes: {
+                            resource: "trackedEntityAttributes",
+                            params: {
+                                fields: "id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,formName,optionSet[id]",
+                                paging: false,
+                            },
+                        },
+                        programRules: {
+                            resource: `programRules.json`,
+                            params: {
+                                filter: "program.id:eq:ueBhWkWll5v",
+                                fields: "*,programRuleActions[*]",
+                                paging: false,
+                            },
+                        },
+                        programRuleVariables: {
+                            resource: `programRuleVariables.json`,
+                            params: {
+                                filter: "program.id:eq:ueBhWkWll5v",
+                                fields: "*",
+                                paging: false,
+                            },
+                        },
+                        optionGroups: {
+                            resource: "optionGroups",
+                            params: {
+                                fields: "id,options[id,name,code]",
+                                paging: false,
+                            },
+                        },
+                        motherChildRelationship: {
+                            resource: "relationshipTypes",
+                            id: "vDnDNhGRzzy",
+                        },
                     },
                 }),
-            );
-            const { optionSets } = await queryClient.ensureQueryData(
-                resourceQueryOptions<{
+            )) as [
+                Village[],
+                Program,
+                {
                     optionSets: {
                         id: string;
                         options: { id: string; name: string; code: string }[];
                     }[];
-                }>({
-                    engine,
-                    resource: "optionSets",
-                    params: {
-                        fields: "id,options[id,name,code]",
-                        paging: false,
-                    },
-                }),
-            );
-            const { dataElements } = await queryClient.ensureQueryData(
-                resourceQueryOptions<{ dataElements: DataElement[] }>({
-                    engine,
-                    resource: "dataElements",
-                    params: {
-                        fields: "id,name,code,valueType,formName,optionSetValue,optionSet[id]",
-                        paging: false,
-                    },
-                }),
-            );
-
-            const { trackedEntityAttributes } =
-                await queryClient.ensureQueryData(
-                    resourceQueryOptions<{
-                        trackedEntityAttributes: TrackedEntityAttribute[];
-                    }>({
-                        engine,
-                        resource: "trackedEntityAttributes",
-                        params: {
-                            fields: "id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,formName,optionSet[id]",
-                            paging: false,
-                        },
-                    }),
-                );
-            const { programRules } = await queryClient.ensureQueryData(
-                resourceQueryOptions<{ programRules: ProgramRule[] }>({
-                    engine,
-                    resource: `programRules.json`,
-                    params: {
-                        filter: "program.id:eq:ueBhWkWll5v",
-                        fields: "*,programRuleActions[*]",
-                        paging: false,
-                    },
-                }),
-            );
-            const { programRuleVariables } = await queryClient.ensureQueryData(
-                resourceQueryOptions<{
+                },
+                { dataElements: DataElement[] },
+                {
+                    trackedEntityAttributes: TrackedEntityAttribute[];
+                },
+                { programRules: ProgramRule[] },
+                {
                     programRuleVariables: ProgramRuleVariable[];
-                }>({
-                    engine,
-                    resource: `programRuleVariables.json`,
-                    params: {
-                        filter: "program.id:eq:ueBhWkWll5v",
-                        fields: "*",
-                        paging: false,
-                    },
-                }),
-            );
-            const { optionGroups } = await queryClient.ensureQueryData(
-                resourceQueryOptions<{
+                },
+                {
                     optionGroups: Array<{
                         id: string;
                         options: {
@@ -148,15 +162,9 @@ export const RootRoute = createRootRouteWithContext<{
                             code: string;
                         }[];
                     }>;
-                }>({
-                    engine,
-                    resource: "optionGroups",
-                    params: {
-                        fields: "id,options[id,name,code]",
-                        paging: false,
-                    },
-                }),
-            );
+                },
+                RelationshipType,
+            ];
 
             const finalOptionGroups = optionGroups.flatMap((og) =>
                 og.options.map((o) => ({
@@ -170,7 +178,7 @@ export const RootRoute = createRootRouteWithContext<{
                     optionSet: os.id,
                 })),
             );
-            await db.programs.bulkPut([program]);
+            await db.programs.put(program);
             await db.dataElements.bulkPut(dataElements);
             await db.trackedEntityAttributes.bulkPut(trackedEntityAttributes);
             await db.programRules.bulkPut(programRules);
@@ -178,6 +186,7 @@ export const RootRoute = createRootRouteWithContext<{
             await db.optionGroups.bulkPut(finalOptionGroups);
             await db.optionSets.bulkPut(finalOptionSets);
             await db.villages.bulkPut(villages);
+            await db.relationshipTypes.put(relationshipType);
             return {
                 dataElements: new Map(dataElements.map((de) => [de.id, de])),
                 trackedEntityAttributes: new Map(
@@ -195,8 +204,12 @@ export const RootRoute = createRootRouteWithContext<{
                         ([id, os]) => [id, os],
                     ),
                 ),
+                programOrgUnits: new Set(
+                    program.organisationUnits.map(({ id }) => id),
+                ),
                 program,
                 villages,
+                motherChildRelation: relationshipType,
             };
         }
 
@@ -207,8 +220,9 @@ export const RootRoute = createRootRouteWithContext<{
         const programRuleVariables = await db.programRuleVariables.toArray();
         const optionGroups = await db.optionGroups.toArray();
         const optionSets = await db.optionSets.toArray();
-        const programs = await db.programs.toArray();
+        const [program] = await db.programs.toArray();
         const villages = await db.villages.toArray();
+        const [motherChildRelation] = await db.relationshipTypes.toArray();
 
         return {
             dataElements: new Map(dataElements.map((de) => [de.id, de])),
@@ -227,8 +241,12 @@ export const RootRoute = createRootRouteWithContext<{
                     ([id, os]) => [id, os],
                 ),
             ),
-            program: programs[0],
+            program,
             villages,
+            programOrgUnits: new Set(
+                program.organisationUnits.map(({ id }) => id),
+            ),
+						motherChildRelation
         };
     },
 });
@@ -236,7 +254,7 @@ export const RootRoute = createRootRouteWithContext<{
 function LayoutWithDrafts({
     orgUnit,
     draftModalVisible,
-    setDraftModalVisible
+    setDraftModalVisible,
 }: {
     orgUnit: OrgUnit;
     draftModalVisible: boolean;
@@ -250,61 +268,40 @@ function LayoutWithDrafts({
      * Handle draft recovery
      * Loads draft data into state machine and navigates to appropriate route
      */
-    const handleDraftRecover = (draft: EventDraft | TrackedEntityDraft, type: "event" | "trackedEntity") => {
+    const handleDraftRecover = (
+        draft:
+            | FlattenedTrackedEntity
+            | FlattenedTrackedEntity["events"][number],
+        type: "event" | "trackedEntity",
+    ) => {
         try {
             if (type === "event") {
-                const eventDraft = draft as EventDraft;
-
-                // Load draft into state machine
+                const mainEvent =
+                    draft as FlattenedTrackedEntity["events"][number];
                 trackerActor.send({
                     type: "SET_MAIN_EVENT",
-                    mainEvent: {
-                        event: eventDraft.event,
-                        programStage: eventDraft.programStage,
-                        trackedEntity: eventDraft.trackedEntity,
-                        enrollment: eventDraft.enrollment,
-                        dataValues: eventDraft.dataValues,
-                        occurredAt: eventDraft.occurredAt,
-                        orgUnit: eventDraft.orgUnit,
-                        program: eventDraft.program,
-                        status: "ACTIVE",
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                    },
+                    mainEvent,
                 });
-
-                // Navigate to tracked entity page
                 navigate({
                     to: "/tracked-entity/$trackedEntity",
-                    params: { trackedEntity: eventDraft.trackedEntity },
+                    params: { trackedEntity: mainEvent.trackedEntity },
                 });
-
-                message.success("Draft loaded successfully. You can continue editing.");
+                message.success(
+                    "Draft loaded successfully. You can continue editing.",
+                );
             } else {
-                const trackedEntityDraft = draft as TrackedEntityDraft;
-
-                // Load draft into state machine
+                const trackedEntity = draft as FlattenedTrackedEntity;
                 trackerActor.send({
                     type: "SET_TRACKED_ENTITY",
-                    trackedEntity: {
-                        trackedEntity: trackedEntityDraft.id,
-                        attributes: trackedEntityDraft.attributes,
-                        enrollment: trackedEntityDraft.enrollment,
-                        events: [],
-                        orgUnit: trackedEntityDraft.orgUnit,
-                        program: trackedEntityDraft.program,
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                    },
+                    trackedEntity,
                 });
-
-                // Stay on home page or navigate to registration
-                message.success("Registration draft loaded. You can continue editing.");
+                message.success(
+                    "Registration draft loaded. You can continue editing.",
+                );
             }
 
             setDraftModalVisible(false);
         } catch (error) {
-            console.error("Failed to recover draft:", error);
             message.error("Failed to load draft. Please try again.");
         }
     };
@@ -340,9 +337,7 @@ function LayoutWithDrafts({
                             style={{ margin: 0, color: "#1f4788" }}
                         >
                             Medical{" "}
-                            <Text style={{ fontWeight: 300 }}>
-                                eRegistry
-                            </Text>
+                            <Text style={{ fontWeight: 300 }}>eRegistry</Text>
                         </Title>
                     </Flex>
 
@@ -356,7 +351,9 @@ function LayoutWithDrafts({
                             <Button
                                 icon={<FileTextOutlined />}
                                 onClick={() => {
-                                    console.log("Drafts button clicked, opening modal");
+                                    console.log(
+                                        "Drafts button clicked, opening modal",
+                                    );
                                     setDraftModalVisible(true);
                                 }}
                             >
@@ -369,7 +366,6 @@ function LayoutWithDrafts({
 
                 <Outlet />
             </Layout>
-
             <DraftRecovery
                 visible={draftModalVisible}
                 onClose={() => setDraftModalVisible(false)}

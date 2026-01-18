@@ -3,10 +3,15 @@ import { UseNavigateResult } from "@tanstack/react-router";
 import { createActorContext } from "@xstate/react";
 import { MessageInstance } from "antd/es/message/interface";
 import { assertEvent, assign, fromPromise, setup } from "xstate";
-import { FlattenedTrackedEntity } from "../db";
+import {
+    FlattenedEvent,
+    FlattenedRelationship,
+    FlattenedTrackedEntity,
+} from "../db";
 import {
     bulkSaveTrackedEntities,
     saveEvent,
+    saveRelationship,
     saveTrackedEntity,
 } from "../db/operations";
 import type { SyncManager } from "../db/sync";
@@ -23,6 +28,7 @@ import {
 import { generateUid } from "../utils/id";
 import {
     createEmptyEvent,
+    createEmptyProgramRuleResult,
     createEmptyTrackedEntity,
     executeProgramRules,
     flattenTrackedEntityResponse,
@@ -31,6 +37,7 @@ import {
 interface TrackerContext {
     trackedEntities: FlattenedTrackedEntity[];
     trackedEntity: FlattenedTrackedEntity;
+    childTrackedEntity: FlattenedTrackedEntity;
     trackedEntityId?: string;
     error?: string;
     engine: ReturnType<typeof useDataEngine>;
@@ -38,11 +45,14 @@ interface TrackerContext {
     orgUnit: OrgUnit;
     currentEvent: FlattenedTrackedEntity["events"][number];
     mainEvent: FlattenedTrackedEntity["events"][number];
+    childEvent: FlattenedTrackedEntity["events"][number];
     eventUpdates: string[];
     search: OnChange;
     registrationRuleResults: ProgramRuleResult;
+    childRegistrationRuleResults: ProgramRuleResult;
     mainEventRuleResults: ProgramRuleResult;
     currentEventRuleResults: ProgramRuleResult;
+    childEventRuleResults: ProgramRuleResult;
     modalState: "closed" | "creating" | "viewing" | "editing";
     syncManager?: SyncManager;
     message: MessageInstance;
@@ -58,7 +68,10 @@ type TrackerEvents =
     | {
           type: "CREATE_TRACKED_CHILD_ENTITY";
           trackedEntity: FlattenedTrackedEntity;
-          relationship?: any;
+      }
+    | {
+          type: "CREATE_RELATIONSHIP";
+          relationship: FlattenedRelationship;
       }
     | {
           type: "SET_TRACKED_ENTITY";
@@ -74,7 +87,7 @@ type TrackerEvents =
       }
     | {
           type: "CREATE_OR_UPDATE_EVENT";
-          event: FlattenedTrackedEntity["events"][number];
+          event: FlattenedEvent;
       }
     | { type: "SEARCH"; search: OnChange }
     | {
@@ -83,7 +96,11 @@ type TrackerEvents =
       }
     | {
           type: "SET_CURRENT_EVENT";
-          currentEvent: FlattenedTrackedEntity["events"][number];
+          currentEvent: FlattenedEvent;
+      }
+    | {
+          type: "SET_CHILD_EVENT";
+          childEvent: FlattenedEvent;
       }
     | {
           type: "TOGGLE_ATTRIBUTE_COLUMN";
@@ -113,15 +130,29 @@ type TrackerEvents =
           type: "RESET_TRACKED_ENTITY";
       }
     | {
+          type: "RESET_CHILD_ENTITY";
+      }
+    | {
           type: "EXECUTE_PROGRAM_RULES";
           attributeValues?: Record<string, any>;
           dataValues?: Record<string, any>;
           programStage?: string;
           programRules: ProgramRule[];
           programRuleVariables: ProgramRuleVariable[];
-      }
-    | {
-          type: "UPDATE_DATA_WITH_ASSIGNMENTS";
+          enrollment?: { enrolledAt: string; occurredAt: string };
+          ruleResultKey:
+              | "registrationRuleResults"
+              | "childRegistrationRuleResults"
+              | "mainEventRuleResults"
+              | "currentEventRuleResults"
+              | "childEventRuleResults";
+          ruleResultUpdateKey:
+              | "childTrackedEntity"
+              | "currentEvent"
+              | "trackedEntity"
+              | "childEvent"
+              | "mainEvent";
+          updateKey: "dataValues" | "attributes";
       }
     | {
           type: "RESET_REGISTRATION_FORM";
@@ -154,12 +185,10 @@ export const trackerMachine = setup({
             const params = new URLSearchParams({
                 pageSize: "5",
                 page: "1",
-                totalPages: "true",
                 program: "ueBhWkWll5v",
-                orgUnitMode: "SELECTED",
-                orgUnits,
+                orgUnitMode: "ACCESSIBLE",
                 order: "updatedAt:DESC",
-                fields: "trackedEntity,orgUnit,createdAt,updatedAt,inactive,attributes,enrollments[*,events[*]]",
+                fields: "trackedEntity,orgUnit,createdAt,updatedAt,inactive,attributes,relationships[relationship,to],enrollments[*,events[*]]",
             });
 
             if (Object.keys(search.filters || {}).length > 0) {
@@ -212,7 +241,6 @@ export const trackerMachine = setup({
             {
                 syncManager?: SyncManager;
                 trackedEntity: FlattenedTrackedEntity;
-                relationship?: any;
             }
         >(async ({ input: { syncManager, trackedEntity } }) => {
             await saveTrackedEntity(trackedEntity);
@@ -220,6 +248,20 @@ export const trackerMachine = setup({
                 await syncManager.queueCreateTrackedEntity(trackedEntity, 8);
             }
             return trackedEntity;
+        }),
+
+        createRelationship: fromPromise<
+            FlattenedRelationship,
+            {
+                syncManager?: SyncManager;
+                relationship: FlattenedRelationship;
+            }
+        >(async ({ input: { syncManager, relationship } }) => {
+            await saveRelationship(relationship);
+            if (syncManager) {
+                await syncManager.queueCreateRelationship(relationship, 8);
+            }
+            return relationship;
         }),
     },
     actions: {
@@ -244,7 +286,13 @@ export const trackerMachine = setup({
                 });
             },
         }),
-
+        resetChildTrackedEntity: assign({
+            childTrackedEntity: ({ context }) => {
+                return createEmptyTrackedEntity({
+                    orgUnit: context.orgUnit.id,
+                });
+            },
+        }),
         resetMainEvent: assign({
             mainEvent: ({ context }) => {
                 const enrollment = context.trackedEntity?.enrollment;
@@ -272,101 +320,44 @@ export const trackerMachine = setup({
                 });
             },
         }),
+        resetChildEvent: assign({
+            childEvent: ({ context }) => {
+                const enrollment = context.childTrackedEntity?.enrollment;
+                return createEmptyEvent({
+                    orgUnit: enrollment?.orgUnit || context.orgUnit.id,
+                    enrollment: enrollment?.enrollment || generateUid(),
+                    program: enrollment?.program || "ueBhWkWll5v",
+                    trackedEntity:
+                        context.trackedEntity?.trackedEntity || generateUid(),
+                    programStage: "K2nxbE9ubSs",
+                });
+            },
+        }),
 
         resetAllProgramRules: assign({
-            registrationRuleResults: () => ({
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            }),
-            mainEventRuleResults: () => ({
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            }),
-            currentEventRuleResults: () => ({
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            }),
+            registrationRuleResults: () => createEmptyProgramRuleResult(),
+            mainEventRuleResults: () => createEmptyProgramRuleResult(),
+            childRegistrationRuleResults: () => createEmptyProgramRuleResult(),
+            currentEventRuleResults: () => createEmptyProgramRuleResult(),
+            childEventRuleResults: () => createEmptyProgramRuleResult(),
         }),
 
         resetRegistrationRules: assign({
-            registrationRuleResults: () => ({
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            }),
+            registrationRuleResults: () => createEmptyProgramRuleResult(),
+        }),
+        resetChildRegistrationRules: assign({
+            childRegistrationRuleResults: () => createEmptyProgramRuleResult(),
         }),
 
         resetMainEventRules: assign({
-            mainEventRuleResults: () => ({
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            }),
+            mainEventRuleResults: () => createEmptyProgramRuleResult(),
         }),
 
         resetCurrentEventRules: assign({
-            currentEventRuleResults: () => ({
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            }),
+            currentEventRuleResults: () => createEmptyProgramRuleResult(),
+        }),
+        resetChildEventRules: assign({
+            childEventRuleResults: () => createEmptyProgramRuleResult(),
         }),
 
         setModalCreating: assign({
@@ -391,7 +382,7 @@ export const trackerMachine = setup({
             }
         },
 
-        persistEvent: async ({ context, event }) => {
+        persistEvent: async ({ event }) => {
             if (event.type === "CREATE_OR_UPDATE_EVENT" && event.event?.event) {
                 await saveEvent(event.event);
             }
@@ -490,7 +481,7 @@ export const trackerMachine = setup({
             }
         },
 
-        executeProgramRules: assign(({ context, event }) => {
+        executeProgramRules: assign(({ event, context }) => {
             if (event.type !== "EXECUTE_PROGRAM_RULES") {
                 return {};
             }
@@ -501,18 +492,18 @@ export const trackerMachine = setup({
                 attributeValues: event.attributeValues,
                 programStage: event.programStage,
                 program: "ueBhWkWll5v",
-                enrollment: context.trackedEntity.enrollment,
+                enrollment: event.enrollment,
             });
-
-            // Route results based on programStage context, not just attributeValues presence
-            // attributeValues can be included for reference even in program stage events
-            if (event.programStage === undefined) {
-                return { registrationRuleResults: results };
-            } else if (event.programStage === context.mainEvent.programStage) {
-                return { mainEventRuleResults: results };
-            } else {
-                return { currentEventRuleResults: results };
-            }
+            return {
+                [event.ruleResultKey]: results,
+                [event.ruleResultUpdateKey]: {
+                    ...context[event.ruleResultUpdateKey],
+                    [event.updateKey]: {
+                        ...context[event.ruleResultUpdateKey][event.updateKey],
+                        ...results.assignments,
+                    },
+                },
+            };
         }),
 
         // Notification actions
@@ -548,36 +539,6 @@ export const trackerMachine = setup({
                 duration: 2,
             });
         },
-
-        updateDataWithAssignments: assign({
-            trackedEntity: ({ context }) => {
-                return {
-                    ...context.trackedEntity,
-                    attributes: {
-                        ...context.trackedEntity.attributes,
-                        ...context.registrationRuleResults.assignments,
-                    },
-                };
-            },
-            mainEvent: ({ context }) => {
-                return {
-                    ...context.mainEvent,
-                    dataValues: {
-                        ...context.mainEvent.dataValues,
-                        ...context.mainEventRuleResults.assignments,
-                    },
-                };
-            },
-            currentEvent: ({ context }) => {
-                return {
-                    ...context.currentEvent,
-                    dataValues: {
-                        ...context.currentEvent.dataValues,
-                        ...context.currentEventRuleResults.assignments,
-                    },
-                };
-            },
-        }),
     },
 }).createMachine({
     id: "tracker",
@@ -594,6 +555,9 @@ export const trackerMachine = setup({
             trackedEntity: createEmptyTrackedEntity({
                 orgUnit: defaultOrgUnit,
             }),
+            childTrackedEntity: createEmptyTrackedEntity({
+                orgUnit: defaultOrgUnit,
+            }),
             currentEvent: createEmptyEvent({
                 orgUnit: defaultOrgUnit,
                 program: "ueBhWkWll5v",
@@ -608,51 +572,20 @@ export const trackerMachine = setup({
                 enrollment: "",
                 programStage: "K2nxbE9ubSs",
             }),
+            childEvent: createEmptyEvent({
+                orgUnit: defaultOrgUnit,
+                program: "ueBhWkWll5v",
+                trackedEntity: "",
+                enrollment: "",
+                programStage: "K2nxbE9ubSs",
+            }),
             trackedEntityId: "",
             // Initialize separate rule results for each context
-            registrationRuleResults: {
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            },
-            mainEventRuleResults: {
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            },
-            currentEventRuleResults: {
-                assignments: {},
-                hiddenFields: new Set(),
-                shownFields: new Set(),
-                hiddenSections: new Set(),
-                shownSections: new Set(),
-                messages: [],
-                warnings: [],
-                errors: [],
-                hiddenOptions: {},
-                shownOptions: {},
-                hiddenOptionGroups: {},
-                shownOptionGroups: {},
-            },
-
+            registrationRuleResults: createEmptyProgramRuleResult(),
+            childRegistrationRuleResults: createEmptyProgramRuleResult(),
+            mainEventRuleResults: createEmptyProgramRuleResult(),
+            currentEventRuleResults: createEmptyProgramRuleResult(),
+            childEventRuleResults: createEmptyProgramRuleResult(),
             eventUpdates: [],
             search: {
                 pagination: { current: 1, pageSize: 10, total: 0 },
@@ -673,13 +606,6 @@ export const trackerMachine = setup({
                         search: ({ event }) => event.search,
                     }),
                 },
-                // SET_ORG_UNIT: {
-                //     target: "loading",
-                //     actions: assign({
-                //         orgUnit: ({ event }) => event.orgUnit,
-                //     }),
-                // },
-
                 SET_TRACKED_ENTITY: {
                     target: "entitySuccess",
                     actions: [
@@ -707,9 +633,6 @@ export const trackerMachine = setup({
                         // "queueTrackedEntitySync",
                     ],
                 },
-                UPDATE_DATA_WITH_ASSIGNMENTS: {
-                    actions: "updateDataWithAssignments",
-                },
                 EXECUTE_PROGRAM_RULES: {
                     actions: "executeProgramRules",
                 },
@@ -719,6 +642,7 @@ export const trackerMachine = setup({
                 RESET_CURRENT_EVENT: {
                     actions: ["resetCurrentEvent", "resetCurrentEventRules"],
                 },
+
                 RESET_PROGRAM_RULES: {
                     actions: "resetAllProgramRules",
                 },
@@ -777,7 +701,6 @@ export const trackerMachine = setup({
                     ],
                 },
                 onError: {
-                    // target: "failure",
                     actions: assign({
                         error: ({ event }) =>
                             event.error instanceof Error
@@ -799,9 +722,6 @@ export const trackerMachine = setup({
                 EVALUATE_EVENT_RULES: {
                     actions: ["evaluateEventRules"],
                 },
-                UPDATE_DATA_WITH_ASSIGNMENTS: {
-                    actions: "updateDataWithAssignments",
-                },
                 EXECUTE_PROGRAM_RULES: {
                     actions: "executeProgramRules",
                 },
@@ -817,6 +737,9 @@ export const trackerMachine = setup({
                 CREATE_TRACKED_CHILD_ENTITY: {
                     target: "saveChildTrackedEntity",
                 },
+                CREATE_RELATIONSHIP: {
+                    target: "saveRelationship",
+                },
                 RESET_TRACKED_ENTITY: {
                     actions: [
                         assign({
@@ -828,6 +751,17 @@ export const trackerMachine = setup({
                         "resetRegistrationRules",
                     ],
                 },
+                RESET_CHILD_ENTITY: {
+                    actions: [
+                        assign({
+                            childTrackedEntity: ({ context }) =>
+                                createEmptyTrackedEntity({
+                                    orgUnit: context.orgUnit.id,
+                                }),
+                        }),
+                        "resetChildRegistrationRules",
+                    ],
+                },
                 SET_CURRENT_EVENT: {
                     actions: [
                         assign({
@@ -836,6 +770,16 @@ export const trackerMachine = setup({
                             },
                         }),
                         "resetCurrentEventRules",
+                    ],
+                },
+                SET_CHILD_EVENT: {
+                    actions: [
+                        assign({
+                            childEvent: ({ event }) => {
+                                return event.childEvent;
+                            },
+                        }),
+                        "resetChildEventRules",
                     ],
                 },
                 SET_MAIN_EVENT: {
@@ -938,6 +882,32 @@ export const trackerMachine = setup({
                     return {
                         syncManager,
                         trackedEntity: event.trackedEntity,
+                    };
+                },
+                onDone: {
+                    actions: "showSuccessNotification",
+                },
+                onError: {
+                    actions: [
+                        assign({
+                            error: ({ event }) =>
+                                event.error instanceof Error
+                                    ? event.error.message
+                                    : String(event.error),
+                        }),
+                        "showErrorNotification",
+                    ],
+                },
+            },
+        },
+        saveRelationship: {
+            entry: "showSavingNotification",
+            invoke: {
+                src: "createRelationship",
+                input: ({ context: { syncManager }, event }) => {
+                    assertEvent(event, "CREATE_RELATIONSHIP");
+                    return {
+                        syncManager,
                         relationship: event.relationship,
                     };
                 },

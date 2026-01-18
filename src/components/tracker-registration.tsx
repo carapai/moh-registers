@@ -16,6 +16,7 @@ import { RootRoute } from "../routes/__root";
 import { flattenTrackedEntity } from "../utils/utils";
 import { getTrackedEntityDraft } from "../db/operations";
 import { useAutoSave } from "../hooks/useAutoSave";
+import { RenderType } from "../schemas";
 
 const { Text } = Typography;
 
@@ -34,10 +35,23 @@ export const TrackerRegistration: React.FC = () => {
         optionSets,
         programRuleVariables,
         programRules,
+        programOrgUnits,
     } = RootRoute.useLoaderData();
-    const allAttributes: Map<string, boolean> = new Map(
+    const allAttributes: Map<
+        string,
+        {
+            mandatory: boolean;
+            desktopRenderType?: RenderType;
+        }
+    > = new Map(
         program.programTrackedEntityAttributes.map(
-            ({ mandatory, trackedEntityAttribute: { id } }) => [id, mandatory],
+            ({ mandatory, renderType, trackedEntityAttribute: { id } }) => [
+                id,
+                {
+                    mandatory,
+                    desktopRenderType: renderType?.DESKTOP,
+                },
+            ],
         ),
     );
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
@@ -53,6 +67,9 @@ export const TrackerRegistration: React.FC = () => {
     const trackerActor = TrackerContext.useActorRef();
     const machineState = TrackerContext.useSelector((state) => state.value);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const orgUnit = TrackerContext.useSelector(
+        (state) => state.context.orgUnit.id,
+    );
 
     // Auto-save registration drafts
     const { clearDraft } = useAutoSave({
@@ -65,7 +82,9 @@ export const TrackerRegistration: React.FC = () => {
             orgUnit: trackedEntity.orgUnit || "",
             program: program.id,
             enrollment: trackedEntity.enrollment?.enrollment || "",
-            isNew: !trackedEntity.trackedEntity || trackedEntity.trackedEntity.startsWith("temp"),
+            isNew:
+                !trackedEntity.trackedEntity ||
+                trackedEntity.trackedEntity.startsWith("temp"),
         },
         onSave: () => console.log("💾 Registration draft auto-saved"),
     });
@@ -86,20 +105,25 @@ export const TrackerRegistration: React.FC = () => {
             attributeValues: allValues,
             programRules: programRules,
             programRuleVariables: programRuleVariables,
+            ruleResultKey: "registrationRuleResults",
+            ruleResultUpdateKey: "trackedEntity",
+            updateKey: "attributes",
         });
-        trackerActor.send({
-            type: "UPDATE_DATA_WITH_ASSIGNMENTS",
-        });
-        console.log("Triggered program rules with values:", ruleResult);
     }, [form, trackerActor, programRules, programRuleVariables]);
 
     useEffect(() => {
         const loadDraftIfExists = async () => {
             if (isVisitModalOpen && trackedEntity.trackedEntity) {
                 // Check if a draft exists for this tracked entity
-                const draft = await getTrackedEntityDraft(trackedEntity.trackedEntity);
+                const draft = await getTrackedEntityDraft(
+                    trackedEntity.trackedEntity,
+                );
 
-                if (draft && draft.attributes && Object.keys(draft.attributes).length > 0) {
+                if (
+                    draft &&
+                    draft.attributes &&
+                    Object.keys(draft.attributes).length > 0
+                ) {
                     // Ask user if they want to restore the draft
                     Modal.confirm({
                         title: "Draft Found",
@@ -124,9 +148,9 @@ export const TrackerRegistration: React.FC = () => {
                     attributeValues: trackedEntity.attributes,
                     programRules: programRules,
                     programRuleVariables: programRuleVariables,
-                });
-                trackerActor.send({
-                    type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+                    ruleResultKey: "registrationRuleResults",
+                    ruleResultUpdateKey: "trackedEntity",
+                    updateKey: "attributes",
                 });
             }
         };
@@ -136,7 +160,10 @@ export const TrackerRegistration: React.FC = () => {
 
     // Apply assignments when rule results change
     useEffect(() => {
-        if (isVisitModalOpen && Object.keys(ruleResult.assignments).length > 0) {
+        if (
+            isVisitModalOpen &&
+            Object.keys(ruleResult.assignments).length > 0
+        ) {
             form.setFieldsValue(ruleResult.assignments);
         }
     }, [ruleResult.assignments, isVisitModalOpen, form]);
@@ -229,6 +256,7 @@ export const TrackerRegistration: React.FC = () => {
                     // borderRadius: "6px",
                     // marginTop: "8px",
                 }}
+                disabled={!programOrgUnits.has(orgUnit)}
             >
                 New patient
             </Button>
@@ -365,23 +393,26 @@ export const TrackerRegistration: React.FC = () => {
                                                     (msg) => msg.key === id,
                                                 );
 
+                                            const {
+                                                desktopRenderType,
+                                                mandatory,
+                                            } = allAttributes.get(id)!;
+
                                             return (
                                                 <DataElementField
                                                     key={id}
                                                     dataElement={current}
                                                     hidden={false}
-                                                    renderOptionsAsRadio={false}
-                                                    vertical={false}
                                                     finalOptions={finalOptions}
                                                     messages={messages}
                                                     warnings={warnings}
                                                     errors={errors}
-                                                    required={
-                                                        allAttributes.get(id) ||
-                                                        false
-                                                    }
+                                                    required={mandatory}
                                                     span={spans.get(id) || 6}
                                                     form={form}
+                                                    desktopRenderType={
+                                                        desktopRenderType?.type
+                                                    }
                                                     onTriggerProgramRules={
                                                         handleTriggerProgramRules
                                                     }

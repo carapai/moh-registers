@@ -33,29 +33,27 @@ export const ProgramStageCapture: React.FC<{
     const {
         dataElements,
         optionGroups,
-        program,
         optionSets,
         programRuleVariables,
         programRules,
     } = RootRoute.useLoaderData();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState(0);
+
     const programStageDataElements = new Map(
-        program.programStages
-            .find((ps) => ps.id === programStage.id)
-            ?.programStageDataElements.map((psde) => [
-                psde.dataElement.id,
-                {
-                    allowFutureDate: psde.allowFutureDate,
-                    renderOptionsAsRadio: psde.renderType !== undefined,
-                    compulsory: psde.compulsory,
-                    vertical: psde.renderType
-                        ? psde.renderType.DESKTOP?.type !==
-                          "HORIZONTAL_RADIOBUTTONS"
-                        : false,
-                    ...dataElements.get(psde.dataElement.id),
-                },
-            ]) ?? [],
+        programStage.programStageDataElements.map((psde) => [
+            psde.dataElement.id,
+            {
+                allowFutureDate: psde.allowFutureDate,
+                renderOptionsAsRadio: psde.renderType !== undefined,
+                compulsory: psde.compulsory,
+                vertical: psde.renderType
+                    ? psde.renderType.DESKTOP?.type !==
+                      "HORIZONTAL_RADIOBUTTONS"
+                    : false,
+                ...dataElements.get(psde.dataElement.id),
+            },
+        ]),
     );
     const enrollment = TrackerContext.useSelector(
         (state) => state.context.trackedEntity.enrollment,
@@ -75,6 +73,18 @@ export const ProgramStageCapture: React.FC<{
 
     const trackedEntity = TrackerContext.useSelector(
         (state) => state.context.trackedEntity,
+    );
+
+    const currentDataElements = new Map(
+        programStage.programStageDataElements.map((psde) => [
+            psde.dataElement.id,
+            {
+                allowFutureDate: psde.allowFutureDate,
+                renderOptionsAsRadio: psde.renderType !== undefined,
+                compulsory: psde.compulsory,
+                desktopRenderType: psde.renderType?.DESKTOP?.type,
+            },
+        ]),
     );
     // Convert currentEvent dataValues to Ant Design fields format for controlled form
     // const fields = useMemo(
@@ -141,7 +151,7 @@ export const ProgramStageCapture: React.FC<{
         {
             title: "Action",
             key: "action",
-						width: 100,
+            width: 100,
             render: (_, record) => (
                 <Button
                     icon={<EyeOutlined />}
@@ -155,23 +165,28 @@ export const ProgramStageCapture: React.FC<{
         },
     ];
 
-    const handleTriggerProgramRules = useCallback(
-        () => {
-            const allValues = stageForm.getFieldsValue();
-            trackerActor.send({
-                type: "EXECUTE_PROGRAM_RULES",
-                dataValues: allValues,
-                attributeValues: trackedEntity.attributes, // Include attributes for rules that reference them
-                programStage: programStage.id,
-                programRules,
-                programRuleVariables,
-            });
-            trackerActor.send({
-                type: "UPDATE_DATA_WITH_ASSIGNMENTS",
-            });
-        },
-        [trackedEntity.attributes, stageForm, programStage.id, programRules, programRuleVariables, trackerActor],
-    );
+    const handleTriggerProgramRules = useCallback(() => {
+        const allValues = stageForm.getFieldsValue();
+        trackerActor.send({
+            type: "EXECUTE_PROGRAM_RULES",
+            dataValues: allValues,
+            attributeValues: trackedEntity.attributes,
+            programStage: programStage.id,
+            programRules,
+            programRuleVariables,
+            enrollment: trackedEntity.enrollment,
+            ruleResultKey: "currentEventRuleResults",
+            ruleResultUpdateKey: "currentEvent",
+            updateKey: "dataValues",
+        });
+    }, [
+        trackedEntity.attributes,
+        stageForm,
+        programStage.id,
+        programRules,
+        programRuleVariables,
+        trackerActor,
+    ]);
 
     useEffect(() => {
         if (isVisitModalOpen) {
@@ -183,14 +198,14 @@ export const ProgramStageCapture: React.FC<{
                 trackerActor.send({
                     type: "EXECUTE_PROGRAM_RULES",
                     dataValues: currentEvent.dataValues,
-                    attributeValues: trackedEntity.attributes, // Include attributes for rules that reference them
+                    attributeValues: trackedEntity.attributes,
                     programStage: programStage.id,
                     programRules,
                     programRuleVariables,
-                });
-
-                trackerActor.send({
-                    type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+                    enrollment: trackedEntity.enrollment,
+                    ruleResultKey: "currentEventRuleResults",
+                    ruleResultUpdateKey: "currentEvent",
+                    updateKey: "dataValues",
                 });
             } else {
                 console.log("✨ Creating new stage event with empty form");
@@ -199,7 +214,10 @@ export const ProgramStageCapture: React.FC<{
     }, [isVisitModalOpen, currentEvent.event, trackerActor, stageForm]);
 
     useEffect(() => {
-        if (isVisitModalOpen && Object.keys(ruleResult.assignments).length > 0) {
+        if (
+            isVisitModalOpen &&
+            Object.keys(ruleResult.assignments).length > 0
+        ) {
             stageForm.setFieldsValue(ruleResult.assignments);
         }
     }, [ruleResult.assignments, isVisitModalOpen, stageForm]);
@@ -404,12 +422,12 @@ export const ProgramStageCapture: React.FC<{
                                         {section.dataElements.flatMap(
                                             (dataElement) => {
                                                 const {
-                                                    compulsory = false,
                                                     vertical = false,
                                                     renderOptionsAsRadio = false,
-                                                } = programStageDataElements.get(
-                                                    dataElement.id,
-                                                ) ?? {};
+                                                } =
+                                                    programStageDataElements.get(
+                                                        dataElement.id,
+                                                    ) ?? {};
 
                                                 const currentDataElement =
                                                     dataElements.get(
@@ -493,6 +511,13 @@ export const ProgramStageCapture: React.FC<{
                                                             msg.key ===
                                                             dataElement.id,
                                                     );
+                                                const {
+                                                    compulsory = false,
+                                                    desktopRenderType,
+                                                } =
+                                                    currentDataElements.get(
+                                                        dataElement.id,
+                                                    ) || {};
 
                                                 return (
                                                     <DataElementField
@@ -500,12 +525,11 @@ export const ProgramStageCapture: React.FC<{
                                                             currentDataElement!
                                                         }
                                                         hidden={false}
-                                                        renderOptionsAsRadio={
-                                                            renderOptionsAsRadio
-                                                        }
-                                                        vertical={vertical}
                                                         finalOptions={
                                                             finalOptions
+                                                        }
+                                                        desktopRenderType={
+                                                            desktopRenderType
                                                         }
                                                         messages={messages}
                                                         warnings={warnings}
@@ -513,7 +537,9 @@ export const ProgramStageCapture: React.FC<{
                                                         required={compulsory}
                                                         key={`${section.id}${dataElement.id}`}
                                                         form={stageForm}
-                                                        onTriggerProgramRules={handleTriggerProgramRules}
+                                                        onTriggerProgramRules={
+                                                            handleTriggerProgramRules
+                                                        }
                                                     />
                                                 );
                                             },

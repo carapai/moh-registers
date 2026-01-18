@@ -114,7 +114,6 @@ const MedicalRegistry: React.FC = () => {
     });
 
     const handleSearch = () => {
-        console.log("Searching with filters:", search);
         trackerActor.send({
             type: "SEARCH",
             search: {
@@ -172,12 +171,12 @@ const MedicalRegistry: React.FC = () => {
                                 )
                                 .flatMap(
                                     ({
-                                        displayInList,
+                                        searchable,
                                         displayFormName,
                                         name,
                                         id,
                                     }) => {
-                                        if (!displayInList) {
+                                        if (!searchable) {
                                             return null;
                                         }
                                         return (

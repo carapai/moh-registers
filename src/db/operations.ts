@@ -1,11 +1,10 @@
 import { generateUid } from "../utils/id";
 import {
     db,
-    type EventDraft,
+    FlattenedRelationship,
     type FlattenedEvent,
     type FlattenedTrackedEntity,
     type SyncOperation,
-    type TrackedEntityDraft,
 } from "./index";
 
 /**
@@ -108,6 +107,11 @@ export async function bulkSaveTrackedEntities(
 export async function saveEvent(event: FlattenedEvent): Promise<void> {
     await db.events.put(event);
 }
+export async function saveRelationship(
+    relationship: FlattenedRelationship,
+): Promise<void> {
+    await db.relationships.put(relationship);
+}
 
 /**
  * Get an event by ID
@@ -195,12 +199,12 @@ export async function bulkSaveEvents(events: FlattenedEvent[]): Promise<void> {
  * Save a tracked entity draft (for auto-save)
  */
 export async function saveTrackedEntityDraft(
-    draft: Omit<TrackedEntityDraft, "createdAt" | "updatedAt">,
-): Promise<TrackedEntityDraft> {
+    draft: Omit<FlattenedTrackedEntity, "createdAt" | "updatedAt">,
+): Promise<FlattenedTrackedEntity> {
     const now = new Date().toISOString();
-    const existing = await db.trackedEntityDrafts.get(draft.id);
+    const existing = await db.trackedEntityDrafts.get(draft.trackedEntity);
 
-    const completeDraft: TrackedEntityDraft = {
+    const completeDraft: FlattenedTrackedEntity = {
         ...draft,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
@@ -215,7 +219,7 @@ export async function saveTrackedEntityDraft(
  */
 export async function getTrackedEntityDraft(
     id: string,
-): Promise<TrackedEntityDraft | undefined> {
+): Promise<FlattenedTrackedEntity | undefined> {
     return await db.trackedEntityDrafts.get(id);
 }
 
@@ -233,7 +237,7 @@ export async function deleteTrackedEntityDraft(id: string): Promise<void> {
 export async function getAllTrackedEntityDrafts(
     page: number = 1,
     pageSize: number = 50,
-): Promise<{ drafts: TrackedEntityDraft[]; total: number }> {
+): Promise<{ drafts: FlattenedTrackedEntity[]; total: number }> {
     const total = await db.trackedEntityDrafts.count();
     const drafts = await db.trackedEntityDrafts
         .orderBy("updatedAt")
@@ -249,12 +253,15 @@ export async function getAllTrackedEntityDrafts(
  * Save an event draft (for auto-save)
  */
 export async function saveEventDraft(
-    draft: Omit<EventDraft, "createdAt" | "updatedAt">,
-): Promise<EventDraft> {
+    draft: Omit<
+        FlattenedTrackedEntity["events"][number],
+        "createdAt" | "updatedAt"
+    >,
+): Promise<FlattenedTrackedEntity["events"][number]> {
     const now = new Date().toISOString();
-    const existing = await db.eventDrafts.get(draft.id);
+    const existing = await db.eventDrafts.get(draft.event);
 
-    const completeDraft: EventDraft = {
+    const completeDraft: FlattenedTrackedEntity["events"][number] = {
         ...draft,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
@@ -269,7 +276,7 @@ export async function saveEventDraft(
  */
 export async function getEventDraft(
     id: string,
-): Promise<EventDraft | undefined> {
+): Promise<FlattenedTrackedEntity["events"][number] | undefined> {
     return await db.eventDrafts.get(id);
 }
 
@@ -288,7 +295,10 @@ export async function getEventDraftsByTrackedEntity(
     trackedEntityId: string,
     page: number = 1,
     pageSize: number = 50,
-): Promise<{ drafts: EventDraft[]; total: number }> {
+): Promise<{
+    drafts: FlattenedTrackedEntity["events"];
+    total: number;
+}> {
     const total = await db.eventDrafts
         .where("trackedEntity")
         .equals(trackedEntityId)
@@ -314,7 +324,10 @@ export async function getEventDraftsByTrackedEntity(
 export async function getAllEventDrafts(
     page: number = 1,
     pageSize: number = 50,
-): Promise<{ drafts: EventDraft[]; total: number }> {
+): Promise<{
+    drafts: FlattenedTrackedEntity["events"];
+    total: number;
+}> {
     const total = await db.eventDrafts.count();
     const drafts = await db.eventDrafts
         .orderBy("updatedAt")

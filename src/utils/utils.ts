@@ -21,6 +21,7 @@ export const flattenTrackedEntity = ({
     trackedEntity,
     attributes,
     enrollments,
+    relationships,
     ...rest
 }: TrackedEntity) => {
     const trackedEntityAttributes = (attributes || []).reduce((acc, attr) => {
@@ -57,6 +58,7 @@ export const flattenTrackedEntity = ({
         enrollment: enrollmentDetails,
         events: flattenedEvents,
         trackedEntity,
+        relationships,
     };
 };
 
@@ -97,8 +99,6 @@ export function executeProgramRules({
     enrollment?: { enrolledAt?: string; occurredAt?: string };
 }): ProgramRuleResult {
     const variableValues: Record<string, any> = {};
-
-    // Add system variables
     variableValues["current_date"] = dayjs().format("YYYY-MM-DD");
     variableValues["event_date"] =
         dataValues?.occurredAt || dayjs().format("YYYY-MM-DD");
@@ -113,19 +113,18 @@ export function executeProgramRules({
             dataValues?.hasOwnProperty(variable.dataElement.id)
         ) {
             value = dataValues[variable.dataElement.id];
-        }
-        else if (
+        } else if (
             variable.trackedEntityAttribute &&
             attributeValues?.hasOwnProperty(variable.trackedEntityAttribute.id)
         ) {
             value = attributeValues[variable.trackedEntityAttribute.id];
         }
 
-        if (value !== null && value !== undefined) {
-            console.log(
-                `  📌 Variable "${variable.name}" = ${value} (from ${variable.dataElement ? "dataElement" : "attribute"}: ${variable.dataElement?.id || variable.trackedEntityAttribute?.id})`,
-            );
-        }
+        // if (value !== null && value !== undefined) {
+        //     console.log(
+        //         `  📌 Variable "${variable.name}" = ${value} (from ${variable.dataElement ? "dataElement" : "attribute"}: ${variable.dataElement?.id || variable.trackedEntityAttribute?.id})`,
+        //     );
+        // }
         variableValues[variable.name] = value ?? null;
     }
 
@@ -198,39 +197,33 @@ export function executeProgramRules({
         },
 
         daysBetween: (date1: string, date2: string): number => {
-            const d1 = new Date(date1);
-            const d2 = new Date(date2);
-            if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 0;
-            const diffTime = Math.abs(d2.getTime() - d1.getTime());
-            return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const d1 = dayjs(date1);
+            const d2 = dayjs(date2);
+            return d2.diff(d1, "days");
         },
 
         weeksBetween: (date1: string, date2: string): number => {
-            return Math.floor(d2Functions.daysBetween(date1, date2) / 7);
+            const d1 = dayjs(date1);
+            const d2 = dayjs(date2);
+            return d2.diff(d1, "weeks");
         },
 
         monthsBetween: (date1: string, date2: string): number => {
-            const d1 = new Date(date1);
-            const d2 = new Date(date2);
-            if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 0;
-            return (
-                (d2.getFullYear() - d1.getFullYear()) * 12 +
-                (d2.getMonth() - d1.getMonth())
-            );
+            
+            const d1 = dayjs(date1);
+            const d2 = dayjs(date2);
+            return d2.diff(d1, "months");
         },
 
         yearsBetween: (date1: string, date2: string): number => {
-            const d1 = new Date(date1);
-            const d2 = new Date(date2);
-            if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 0;
-            return d2.getFullYear() - d1.getFullYear();
+            const d1 = dayjs(date1);
+            const d2 = dayjs(date2);
+            return d2.diff(d1, "years");
         },
 
         addDays: (date: string, days: number): string => {
-            const d = new Date(date);
-            if (isNaN(d.getTime())) return date;
-            d.setDate(d.getDate() + days);
-            return d.toISOString().split("T")[0];
+            const d = dayjs(date);
+            return d.add(days, "days").format("YYYY-MM-DD");
         },
 
         floor: (value: number): number => {
@@ -631,7 +624,6 @@ export function executeProgramRules({
                         .replace(/([^!<>=])=(?!=)/g, "$1===");
                 }
                 const normalizedCond = parts.join("'");
-                // Create function with d2Functions and variableValues in scope
                 const func = new Function(
                     "d2Functions",
                     "variableValues",
@@ -689,7 +681,6 @@ export function executeProgramRules({
         // console.log(
         //     `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
         // );
-
         if (!isTrue) {
             continue;
         }
@@ -899,6 +890,7 @@ export const createEmptyTrackedEntity = ({
         createdAtClient: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
         potentialDuplicate: false,
         trackedEntity,
+        relationships: [],
     };
 };
 
@@ -972,4 +964,21 @@ export const createGetValueProps = (valueType: string | undefined) => {
         return { value };
     };
     return getValueProps;
+};
+
+export const createEmptyProgramRuleResult = (): ProgramRuleResult => {
+    return {
+        assignments: {},
+        hiddenFields: new Set(),
+        shownFields: new Set(),
+        hiddenSections: new Set(),
+        shownSections: new Set(),
+        messages: [],
+        warnings: [],
+        errors: [],
+        hiddenOptions: {},
+        shownOptions: {},
+        hiddenOptionGroups: {},
+        shownOptionGroups: {},
+    };
 };

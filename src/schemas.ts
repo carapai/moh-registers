@@ -2,6 +2,21 @@ import { GetProp, TablePaginationConfig, TreeSelectProps } from "antd";
 import { FilterValue } from "antd/es/table/interface";
 import z from "zod";
 
+const RenderTypeSchema = z.object({
+    type: z.enum([
+        "DEFAULT",
+        "DROPDOWN",
+        "VERTICAL_RADIOBUTTONS",
+        "HORIZONTAL_RADIOBUTTONS",
+        "VERTICAL_CHECKBOXES",
+        "HORIZONTAL_CHECKBOXES",
+        "SHARED_HEADER_RADIOBUTTONS",
+        "ICONS_AS_BUTTONS",
+        "SPINNER",
+        "ICON",
+    ]),
+});
+
 export const UserSchema = z.object({
     uid: z.string(),
     username: z.string(),
@@ -53,8 +68,8 @@ export const ProgramStageSchema = z.object({
             dataElement: DataElementSchema,
             renderType: z
                 .object({
-                    MOBILE: z.object({ type: z.string() }),
-                    DESKTOP: z.object({ type: z.string() }),
+                    MOBILE: RenderTypeSchema,
+                    DESKTOP: RenderTypeSchema,
                 })
                 .optional(),
         }),
@@ -83,7 +98,15 @@ export const ProgramTrackedEntityAttributeSchema = z.object({
     mandatory: z.boolean(),
     id: z.string(),
     displayInList: z.boolean(),
+    renderOptionsAsRadio: z.boolean(),
+    searchable: z.boolean(),
     trackedEntityAttribute: TrackedEntityAttributeSchema,
+    renderType: z
+        .object({
+            DESKTOP: RenderTypeSchema,
+            MOBILE: RenderTypeSchema,
+        })
+        .optional(),
 });
 
 export const ProgramSectionSchema = z.object({
@@ -255,7 +278,7 @@ export const EnrollmentsSchema = z.object({
     notes: z.array(z.unknown()).optional(),
 });
 
-export const TrackedEntitySchema = z.object({
+export const BasicTrackedEntitySchema = z.object({
     trackedEntity: z.string(),
     trackedEntityType: z.string(),
     createdAt: z.string(),
@@ -278,7 +301,17 @@ export const TrackedEntitySchema = z.object({
             }),
         )
         .optional(),
-    relationships: z.array(z.unknown()).optional(),
+});
+
+export const TrackedEntitySchema = BasicTrackedEntitySchema.extend({
+    relationships: z.array(
+        z.object({
+            relationship: z.string(),
+            to: z.object({
+                trackedEntity: BasicTrackedEntitySchema,
+            }),
+        }),
+    ),
 });
 
 export const TrackedEntityResponseSchema = z.object({
@@ -352,6 +385,7 @@ export type ProgramSection = z.infer<typeof ProgramSectionSchema>;
 
 export type FDataElement = z.infer<typeof FDataElementSchema>;
 export type FAttribute = z.infer<typeof FAttributeSchema>;
+export type RenderType = z.infer<typeof RenderTypeSchema>;
 
 export type Message = {
     key: string;
@@ -382,3 +416,35 @@ export type Node = Omit<
     GetProp<TreeSelectProps, "treeData">[number],
     "label"
 > & { user: string };
+
+export interface RelationshipType {
+    name: string;
+    created: string;
+    lastUpdated: string;
+    fromConstraint: Constraint;
+    toConstraint: Constraint;
+    bidirectional: boolean;
+    fromToName: string;
+    toFromName: string;
+    referral: boolean;
+    displayFromToName: string;
+    displayToFromName: string;
+    displayName: string;
+    id: string;
+}
+
+export interface Constraint {
+    relationshipEntity: string;
+    trackedEntityType: TrackedEntityType;
+    program: TrackedEntityType;
+    trackerDataView: TrackerDataView;
+}
+
+export interface TrackerDataView {
+    attributes: string[];
+    dataElements: any[];
+}
+
+export interface TrackedEntityType {
+    id: string;
+}

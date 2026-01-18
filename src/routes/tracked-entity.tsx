@@ -46,6 +46,9 @@ import { RootRoute } from "./__root";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { getEventDraft } from "../db/operations";
 import { orderBy } from "lodash";
+import { RenderType } from "../schemas";
+import { generateUid } from "../utils/id";
+import RelationshipEvent from "../components/relationship-event";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -63,8 +66,13 @@ function TrackedEntity() {
         optionSets,
         programRules,
         programRuleVariables,
+        programOrgUnits,
+        motherChildRelation,
     } = RootRoute.useLoaderData();
     const trackerActor = TrackerContext.useActorRef();
+    const orgUnit = TrackerContext.useSelector(
+        (state) => state.context.orgUnit.id,
+    );
     const [serviceTypes, setServiceTypes] = useState<
         Array<{ id: string; name: string; code: string; optionSet: string }>
     >(optionSets.get("QwsvSPpnRul") ?? []);
@@ -85,6 +93,8 @@ function TrackedEntity() {
         (state) => state.context.trackedEntity,
     );
 
+    const state = TrackerContext.useSelector((s) => s.value);
+
     const dataElementToAttributeMap: Record<string, string> = {
         KJ2V2JlOxFi: "Y3DE5CZWySr",
     };
@@ -95,12 +105,8 @@ function TrackedEntity() {
         "oTI0DLitzFY",
     ];
 
-    // Configuration: Rename/relabel attributes in the nested modal
-    // Use this to change how attribute labels appear (e.g., "First Name" → "Mother's First Name")
     const attributeLabelOverrides: Record<string, string> = {};
 
-    // Configuration: Populate fields with combined values from multiple sources
-    // Just pre-fills the target field - does NOT hide or rename anything
     const combinedAttributes: Record<
         string,
         {
@@ -118,13 +124,30 @@ function TrackedEntity() {
         },
     };
 
+    const allAttributes: Map<
+        string,
+        {
+            mandatory: boolean;
+            desktopRenderType?: RenderType;
+        }
+    > = new Map(
+        program.programTrackedEntityAttributes.map(
+            ({ mandatory, renderType, trackedEntityAttribute: { id } }) => [
+                id,
+                {
+                    mandatory,
+                    desktopRenderType: renderType?.DESKTOP,
+                },
+            ],
+        ),
+    );
+
     const [visitForm] = Form.useForm();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
-    const [modalKey, setModalKey] = useState(0);
+    const [modalKey, setModalKey] = useState<string>("");
     const [isNestedModalOpen, setIsNestedModalOpen] = useState(false);
     const [nestedModalKey, setNestedModalKey] = useState(0);
     const [nestedForm] = Form.useForm();
-    // const [isUpdatingFromRules, setIsUpdatingFromRules] = useState(false);
     const { clearDraft } = useAutoSave({
         form: visitForm,
         draftId: mainEvent.event,
@@ -141,7 +164,7 @@ function TrackedEntity() {
         },
         onSave: () => console.log("💾 Visit draft auto-saved"),
     });
-    const onVisitSubmit = (values: Record<string, any>) => {
+    const onVisitSubmit = async (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
             console.error(
                 "Form has validation errors from program rules:",
@@ -176,7 +199,7 @@ function TrackedEntity() {
                 content: "Visit record saved successfully!",
                 duration: 3,
             });
-            clearDraft();
+            await clearDraft();
             visitForm.resetFields();
             trackerActor.send({ type: "RESET_MAIN_EVENT" });
             setIsVisitModalOpen(false);
@@ -190,15 +213,14 @@ function TrackedEntity() {
     };
 
     const showVisitModal = (visit: FlattenedEvent) => {
+        visitForm.resetFields();
         trackerActor.send({ type: "SET_MAIN_EVENT", mainEvent: visit });
-        setModalKey((prev) => prev + 1);
+        setModalKey(() => visit.event);
         setIsVisitModalOpen(true);
     };
 
     const showCreateVisitModal = () => {
         visitForm.resetFields();
-        trackerActor.send({ type: "RESET_MAIN_EVENT" });
-
         const emptyEvent = createEmptyEvent({
             program: enrollment.program,
             trackedEntity: enrollment.trackedEntity,
@@ -206,16 +228,16 @@ function TrackedEntity() {
             orgUnit: enrollment.orgUnit,
             programStage: "K2nxbE9ubSs",
         });
-
         trackerActor.send({ type: "SET_MAIN_EVENT", mainEvent: emptyEvent });
-        setModalKey((prev) => prev + 1);
+        setModalKey(() => emptyEvent.event);
         setIsVisitModalOpen(true);
     };
 
-    const handleModalClose = () => {
-        visitForm.resetFields();
-        trackerActor.send({ type: "RESET_MAIN_EVENT" });
+    const handleModalClose = async () => {
         setIsVisitModalOpen(false);
+        await clearDraft();
+        trackerActor.send({ type: "RESET_MAIN_EVENT" });
+        visitForm.resetFields();
     };
 
     const handleSubmit = async () => {
@@ -242,8 +264,6 @@ function TrackedEntity() {
 
         // Get current form values from visit form
         const currentFormValues = visitForm.getFieldsValue();
-        console.log("Current form values for nested modal:", currentFormValues);
-
         // Map data elements to attributes
         const mappedAttributes: Record<string, any> = {};
         Object.entries(dataElementToAttributeMap).forEach(
@@ -308,11 +328,40 @@ function TrackedEntity() {
                 }),
                 attributes: values,
             };
-
+            const relationship = {
+                relationshipType: "vDnDNhGRzzy",
+                relationship: generateUid(),
+                from: {
+                    trackedEntity: {
+                        trackedEntity: mainEvent.trackedEntity,
+                    },
+                },
+                to: {
+                    trackedEntity: {
+                        trackedEntity: newTrackedEntity.trackedEntity,
+                        attributes:
+                            motherChildRelation.toConstraint.trackerDataView.attributes.flatMap(
+                                (a) => {
+                                    if (values[a]) {
+                                        return {
+                                            attribute: a,
+                                            value: values[a],
+                                        };
+                                    }
+                                    return [];
+                                },
+                            ),
+                    },
+                },
+            };
             trackerActor.send({
                 type: "CREATE_TRACKED_CHILD_ENTITY",
                 trackedEntity: newTrackedEntity,
             });
+            // trackerActor.send({
+            //     type: "CREATE_RELATIONSHIP",
+            // 		relationship
+            // });
         } catch (error) {
             console.error("Error creating child:", error);
             message.error({
@@ -376,7 +425,7 @@ function TrackedEntity() {
                 ),
             },
         ],
-        [], // Empty deps - columns don't depend on state
+        [],
     );
     const items: DescriptionsProps["items"] = Object.entries(
         trackedEntity.attributes || {},
@@ -399,65 +448,62 @@ function TrackedEntity() {
             programRuleVariables,
             programStage: mainEvent.programStage,
             attributeValues: trackedEntity.attributes,
-        });
-        trackerActor.send({
-            type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+            ruleResultKey: "mainEventRuleResults",
+            enrollment: trackedEntity.enrollment,
+            ruleResultUpdateKey: "mainEvent",
+            updateKey: "dataValues",
         });
     }, [
         visitForm,
         trackerActor,
         programRules,
         programRuleVariables,
-        mainEvent.programStage,
         trackedEntity.attributes,
     ]);
 
     useEffect(() => {
         const loadDraftIfExists = async () => {
-            if (isVisitModalOpen && mainEvent.event) {
-                // Check if a draft exists for this event
-                const draft = await getEventDraft(mainEvent.event);
-
-                if (
-                    draft &&
-                    draft.dataValues &&
-                    Object.keys(draft.dataValues).length > 0
-                ) {
-                    // Ask user if they want to restore the draft
-                    Modal.confirm({
-                        title: "Draft Found",
-                        content: `A saved draft was found for this visit (last saved: ${new Date(draft.updatedAt).toLocaleString()}). Would you like to restore it?`,
-                        okText: "Restore Draft",
-                        cancelText: "Start Fresh",
-                        onOk: () => {
-                            // Load draft data into form
-                            visitForm.setFieldsValue(draft.dataValues);
-                            message.success("Draft restored successfully");
-                        },
-                        onCancel: () => {
-                            // User chose to start fresh, do nothing
-                            message.info("Starting with a fresh form");
-                        },
-                    });
-                }
-
-                // Execute program rules regardless of draft
-                trackerActor.send({
-                    type: "EXECUTE_PROGRAM_RULES",
-                    programRules: programRules,
-                    programRuleVariables: programRuleVariables,
-                    programStage: mainEvent.programStage,
-                    dataValues: mainEvent.dataValues,
-                    attributeValues: trackedEntity.attributes,
-                });
-                trackerActor.send({
-                    type: "UPDATE_DATA_WITH_ASSIGNMENTS",
+            // Check if a draft exists for this event
+            const draft = await getEventDraft(mainEvent.event);
+            if (
+                draft &&
+                draft.dataValues &&
+                Object.keys(draft.dataValues).length > 0
+            ) {
+                // Ask user if they want to restore the draft
+                Modal.confirm({
+                    title: "Draft Found",
+                    content: `A saved draft was found for this visit (last saved: ${new Date(draft.updatedAt).toLocaleString()}). Would you like to restore it?`,
+                    okText: "Restore Draft",
+                    cancelText: "Start Fresh",
+                    onOk: () => {
+                        // Load draft data into form
+                        visitForm.setFieldsValue(draft.dataValues);
+                        message.success("Draft restored successfully");
+                    },
+                    onCancel: () => {
+                        // User chose to start fresh, do nothing
+                        message.info("Starting with a fresh form");
+                    },
                 });
             }
+            // Execute program rules regardless of draft
+            trackerActor.send({
+                type: "EXECUTE_PROGRAM_RULES",
+                programRules: programRules,
+                programRuleVariables: programRuleVariables,
+                programStage: mainEvent.programStage,
+                dataValues: mainEvent.dataValues,
+                attributeValues: trackedEntity.attributes,
+                ruleResultKey: "mainEventRuleResults",
+                enrollment: trackedEntity.enrollment,
+                ruleResultUpdateKey: "mainEvent",
+                updateKey: "dataValues",
+            });
         };
-
         loadDraftIfExists();
     }, [isVisitModalOpen, mainEvent.event]);
+
     useEffect(() => {
         if (isVisitModalOpen) {
             if (Object.keys(ruleResult.assignments).length > 0) {
@@ -523,6 +569,7 @@ function TrackedEntity() {
                                     type="primary"
                                     icon={<PlusOutlined />}
                                     onClick={showCreateVisitModal}
+                                    disabled={!programOrgUnits.has(orgUnit)}
                                 >
                                     Add Visit
                                 </Button>
@@ -648,10 +695,7 @@ function TrackedEntity() {
                             <MedicineBoxOutlined style={{ fontSize: 18 }} />
                         </div>
                         <Text strong style={{ fontSize: 18 }}>
-                            {mainEvent.event &&
-                            !mainEvent.event.startsWith("temp")
-                                ? "Edit Visit Record"
-                                : "New Visit Record"}
+                            Visit - {state}
                         </Text>
                     </Flex>
                 }
@@ -668,7 +712,7 @@ function TrackedEntity() {
                                 style={{ color: "#7c3aed", fontSize: 16 }}
                             />
                             <Text type="secondary" style={{ fontSize: 14 }}>
-                                Visit Date:{" "}
+                                Visit Date:
                                 <Text strong>
                                     {mainEvent.occurredAt
                                         ? dayjs(mainEvent.occurredAt).format(
@@ -715,6 +759,7 @@ function TrackedEntity() {
                     },
                 }}
                 centered
+                destroyOnHidden
             >
                 <Form
                     form={visitForm}
@@ -821,11 +866,9 @@ function TrackedEntity() {
                                                     psde.renderType !==
                                                     undefined,
                                                 compulsory: psde.compulsory,
-                                                vertical: psde.renderType
-                                                    ? psde.renderType.DESKTOP
-                                                          ?.type !==
-                                                      "HORIZONTAL_RADIOBUTTONS"
-                                                    : false,
+                                                desktopRenderType:
+                                                    psde.renderType?.DESKTOP
+                                                        ?.type,
                                             },
                                         ],
                                     ),
@@ -835,7 +878,7 @@ function TrackedEntity() {
                                         "opwSN351xGC",
                                         "zKGWob5AZKP",
                                         "DA0Yt3V16AN",
-                                    ].indexOf(stage.id) !== -1
+                                    ].includes(stage.id)
                                 ) {
                                     return {
                                         key: stage.id,
@@ -876,11 +919,11 @@ function TrackedEntity() {
                                                                     );
                                                                 const {
                                                                     compulsory = false,
-                                                                    vertical = false,
-                                                                    renderOptionsAsRadio = false,
-                                                                } = currentDataElements.get(
-                                                                    dataElement.id,
-                                                                ) || {};
+                                                                    desktopRenderType,
+                                                                } =
+                                                                    currentDataElements.get(
+                                                                        dataElement.id,
+                                                                    ) || {};
 
                                                                 const optionSet =
                                                                     currentDataElement
@@ -984,11 +1027,8 @@ function TrackedEntity() {
                                                                         hidden={
                                                                             false
                                                                         }
-                                                                        renderOptionsAsRadio={
-                                                                            renderOptionsAsRadio
-                                                                        }
-                                                                        vertical={
-                                                                            vertical
+                                                                        desktopRenderType={
+                                                                            desktopRenderType!
                                                                         }
                                                                         finalOptions={
                                                                             finalOptions
@@ -1019,6 +1059,18 @@ function TrackedEntity() {
                                                             },
                                                         )}
                                                     </Row>
+                                                    {[
+                                                        "Maternity",
+                                                        "Postnatal",
+                                                    ].includes(
+                                                        section.name,
+                                                    ) && (
+                                                        <RelationshipEvent
+                                                            section={
+                                                                section.name
+                                                            }
+                                                        />
+                                                    )}
                                                 </Card>
                                             ),
                                         },
@@ -1156,40 +1208,31 @@ function TrackedEntity() {
                                                 current.optionSet?.id ?? "";
                                             const finalOptions =
                                                 optionSets.get(optionSet);
-                                            const allAttributes: Map<
-                                                string,
-                                                boolean
-                                            > = new Map(
-                                                program.programTrackedEntityAttributes.map(
-                                                    ({
-                                                        mandatory,
-                                                        trackedEntityAttribute:
-                                                            { id },
-                                                    }) => [id, mandatory],
-                                                ),
-                                            );
+
+                                            const {
+                                                desktopRenderType,
+                                                mandatory,
+                                            } = allAttributes.get(id)!;
 
                                             return (
                                                 <DataElementField
                                                     key={id}
                                                     dataElement={current}
                                                     hidden={false}
-                                                    renderOptionsAsRadio={false}
-                                                    vertical={false}
                                                     finalOptions={finalOptions}
                                                     messages={[]}
                                                     warnings={[]}
                                                     errors={[]}
-                                                    required={
-                                                        allAttributes.get(id) ||
-                                                        false
-                                                    }
+                                                    required={mandatory}
                                                     span={6}
                                                     form={nestedForm}
                                                     customLabel={
                                                         attributeLabelOverrides[
                                                             id
                                                         ]
+                                                    }
+                                                    desktopRenderType={
+                                                        desktopRenderType?.type
                                                     }
                                                 />
                                             );

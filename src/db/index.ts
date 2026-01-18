@@ -5,6 +5,7 @@ import {
     Program,
     ProgramRule,
     ProgramRuleVariable,
+    RelationshipType,
     TrackedEntityAttribute,
 } from "../schemas";
 import {
@@ -27,33 +28,8 @@ export type FlattenedTrackedEntities = ReturnType<
 
 // Flattened Event type
 export type FlattenedEvent = FlattenedTrackedEntity["events"][number];
-
-// Draft types for auto-save functionality
-export interface TrackedEntityDraft {
-    id: string; // Same as trackedEntity ID or generated UID for new entities
-    attributes: Record<string, any>;
-    enrollment: FlattenedTrackedEntity["enrollment"];
-    orgUnit: string;
-    program: string;
-    createdAt: string;
-    updatedAt: string;
-    isNew: boolean; // true if this is a new entity, false if editing existing
-}
-
-export interface EventDraft {
-    id: string; // Same as event ID or generated UID for new events
-    event: string;
-    programStage: string;
-    trackedEntity: string;
-    enrollment: string;
-    dataValues: Record<string, any>;
-    occurredAt: string;
-    orgUnit: string;
-    program: string;
-    createdAt: string;
-    updatedAt: string;
-    isNew: boolean; // true if this is a new event, false if editing existing
-}
+export type FlattenedRelationship =
+    FlattenedTrackedEntity["relationships"][number];
 
 // Sync queue for offline operations
 export interface SyncOperation {
@@ -98,8 +74,10 @@ export class RegisterDatabase extends Dexie {
     // Tables
     trackedEntities!: Table<FlattenedTrackedEntity, string>;
     events!: Table<FlattenedEvent, string>;
-    trackedEntityDrafts!: Table<TrackedEntityDraft, string>;
-    eventDrafts!: Table<EventDraft, string>;
+    relationships!: Table<FlattenedRelationship, string>;
+    trackedEntityDrafts!: Table<FlattenedTrackedEntity, string>;
+    relationshipDraft!: Table<FlattenedRelationship, string>;
+    eventDrafts!: Table<FlattenedEvent, string>;
     syncQueue!: Table<SyncOperation, string>;
     machineState!: Table<MachineState, string>;
     programRules!: Table<ProgramRule, string>;
@@ -117,6 +95,7 @@ export class RegisterDatabase extends Dexie {
     organisationUnits!: Table<Node, string>;
     programs!: Table<Program, string>;
     villages!: Table<Village, string>;
+    relationshipTypes: Table<RelationshipType>;
 
     constructor() {
         super("MOHRegisterDB");
@@ -133,15 +112,21 @@ export class RegisterDatabase extends Dexie {
             // Indexed fields: trackedEntity,programStage,occurredAt
             events: "event,trackedEntity,programStage,enrollment,occurredAt,updatedAt",
 
+            // Relationship table
+            // Primary key: relationship
+            // Indexed fields: relationship
+            relationships: "relationship",
+            relationshipTypes: "id",
+
             // TrackedEntity drafts table
             // Primary key: id
             // Indexed fields: updatedAt (for cleanup and listing)
-            trackedEntityDrafts: "id,orgUnit,updatedAt,isNew",
+            trackedEntityDrafts: "trackedEntity,orgUnit,updatedAt,isNew",
 
             // Event drafts table
             // Primary key: id
             // Indexed fields: trackedEntity,programStage,updatedAt
-            eventDrafts: "id,trackedEntity,programStage,updatedAt,isNew",
+            eventDrafts: "event,trackedEntity,programStage,updatedAt,isNew",
 
             // Sync queue table
             // Primary key: id
@@ -233,8 +218,8 @@ export class RegisterDatabase extends Dexie {
      * Get all drafts for listing in UI
      */
     async getAllDrafts(): Promise<{
-        trackedEntityDrafts: TrackedEntityDraft[];
-        eventDrafts: EventDraft[];
+        trackedEntityDrafts: FlattenedTrackedEntity[];
+        eventDrafts: FlattenedTrackedEntity["events"];
     }> {
         const trackedEntityDrafts = await this.trackedEntityDrafts
             .orderBy("updatedAt")

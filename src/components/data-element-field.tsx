@@ -14,6 +14,7 @@ import {
     DataElement,
     Message,
     OptionSet,
+    RenderType,
     TrackedEntityAttribute,
 } from "../schemas";
 import { createGetValueProps, createNormalize, isDate } from "../utils/utils";
@@ -23,8 +24,6 @@ import VillageSelect from "./village-select";
 export const DataElementField = React.memo<{
     dataElement: DataElement | TrackedEntityAttribute;
     hidden: boolean;
-    renderOptionsAsRadio: boolean;
-    vertical: boolean;
     finalOptions?: OptionSet["options"];
     errors: Array<Message>;
     messages: Array<Message>;
@@ -34,12 +33,11 @@ export const DataElementField = React.memo<{
     form: FormInstance<any>;
     customLabel?: string;
     onTriggerProgramRules?: () => void;
+    desktopRenderType?: RenderType["type"];
 }>(
     ({
         dataElement,
         hidden,
-        renderOptionsAsRadio,
-        vertical,
         finalOptions,
         errors,
         messages,
@@ -48,6 +46,7 @@ export const DataElementField = React.memo<{
         span = 8,
         form,
         customLabel,
+        desktopRenderType,
         onTriggerProgramRules,
     }) => {
         if (hidden) return null;
@@ -109,11 +108,14 @@ export const DataElementField = React.memo<{
         } else if (
             dataElement.optionSetValue &&
             dataElement.optionSet &&
-            renderOptionsAsRadio
+            desktopRenderType &&
+            ["VERTICAL_RADIOBUTTONS", "HORIZONTAL_RADIOBUTTONS"].includes(
+                desktopRenderType,
+            )
         ) {
             element = (
                 <Radio.Group
-                    vertical={vertical}
+                    vertical={desktopRenderType === "VERTICAL_RADIOBUTTONS"}
                     onChange={onTriggerProgramRules}
                 >
                     {finalOptions?.map((o) => (

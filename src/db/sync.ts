@@ -1,7 +1,6 @@
 import { useDataEngine } from "@dhis2/app-runtime";
 import { db, type SyncOperation } from "./index";
 import {
-    completeSyncOperation,
     deleteOldDrafts,
     deleteSyncOperation,
     failSyncOperation,
@@ -59,13 +58,11 @@ export class SyncManager {
     private setupDatabaseHooks() {
         // Hook for creating records
         db.trackedEntities.hook("creating", (primKey, obj, transaction) => {});
-
         // Hook for updating records
         db.trackedEntities.hook(
             "updating",
             (modifications, primKey, obj, transaction) => {},
         );
-
         // Hook for deleting records
         db.trackedEntities.hook("deleting", (primKey, obj, transaction) => {});
 
@@ -89,7 +86,7 @@ export class SyncManager {
             console.log("📡 Network connection restored");
             this.isOnline = true;
             this.notifyListeners();
-            this.startSync(); // Immediately sync when coming back online
+            this.startSync(); 
         });
 
         window.addEventListener("offline", () => {
@@ -223,8 +220,6 @@ export class SyncManager {
         try {
             console.log("🔄 Starting sync...");
             let syncedCount = 0;
-
-            // ✅ OPTIMIZED: Process queue in batches of up to 10 operations
             while (this.isOnline) {
                 // Get batch of operations
                 const batch = await this.getNextBatch(10);
@@ -262,7 +257,6 @@ export class SyncManager {
                             syncedCount++;
                         }
                     }
-
                     // Process entities one by one (less common, more critical)
                     for (const op of entityOps) {
                         try {
@@ -286,7 +280,6 @@ export class SyncManager {
                     }
                 } catch (error: any) {
                     console.error("❌ Batch sync failed:", error);
-                    // Mark all failed operations
                     for (const op of eventOps) {
                         await failSyncOperation(
                             op.id,
@@ -295,7 +288,6 @@ export class SyncManager {
                     }
                 }
             }
-
             if (syncedCount > 0) {
                 console.log(`✅ Sync completed: ${syncedCount} operations`);
             }
@@ -324,7 +316,6 @@ export class SyncManager {
                     `🔄 Retrying failed operation (attempt ${op.attempts + 1}/3): ${op.type} - ${op.entityId}`,
                 );
             }
-
             // Mark as syncing
             await updateSyncOperation(op.id, {
                 status: "syncing",

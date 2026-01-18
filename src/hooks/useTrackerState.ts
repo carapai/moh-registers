@@ -45,8 +45,7 @@ export function useTrackerState(programStageId?: string): TrackerState {
             enrollment: trackedEntity.enrollment,
             events,
             mainEvent: s.context.mainEvent,
-            // isLoading: s.matches("loadingEntity"),
-            ruleResult: s.context.mainEventRuleResults, // Use main event rule results
+            ruleResult: s.context.mainEventRuleResults,
         };
     });
 
