@@ -86,7 +86,7 @@ export class SyncManager {
             console.log("📡 Network connection restored");
             this.isOnline = true;
             this.notifyListeners();
-            this.startSync(); 
+            this.startSync();
         });
 
         window.addEventListener("offline", () => {
@@ -252,7 +252,7 @@ export class SyncManager {
 
                     if (relationshipOps.length > 0) {
                         await this.processBatchedRelationships(relationshipOps);
-                        for (const op of eventOps) {
+                        for (const op of relationshipOps) {
                             await deleteSyncOperation(op.id);
                             syncedCount++;
                         }
@@ -446,7 +446,7 @@ export class SyncManager {
      * Sync create tracked entity to DHIS2 API
      */
     private async syncCreateTrackedEntity(data: any): Promise<void> {
-        const { attributes, enrollment, events, ...rest } = data;
+        const { attributes, enrollment, events, relationships, ...rest } = data;
 
         const allAttributes = Object.entries(attributes).flatMap(
             ([attribute, value]: [string, any]) => {
@@ -457,24 +457,34 @@ export class SyncManager {
             },
         );
 
+        console.log("Syncing tracked entity:", allAttributes, data);
+
         const trackedEntities = [
             {
                 ...rest,
-                attributes: allAttributes, // ✅ FIX: Attributes belong on trackedEntity
+                attributes: allAttributes,
             },
         ];
 
         const enrollments = [
             {
                 ...enrollment,
-                attributes: [], // Enrollment doesn't need attributes, they're on trackedEntity
+                attributes: allAttributes,
             },
         ];
+
+        // Build the payload with relationships if they exist
+        const payload: any = { trackedEntities, enrollments };
+
+        if (relationships && relationships.length > 0) {
+            payload.relationships = relationships;
+            console.log("Including relationships in payload:", relationships);
+        }
 
         await this.engine.mutate({
             resource: "tracker",
             type: "create",
-            data: { trackedEntities, enrollments },
+            data: payload,
             params: { async: false },
         });
     }
@@ -505,14 +515,14 @@ export class SyncManager {
         const trackedEntities = [
             {
                 ...rest,
-                attributes: allAttributes, // ✅ FIX: Attributes belong on trackedEntity, not enrollment
+                attributes: allAttributes,
             },
         ];
 
         const enrollments = [
             {
                 ...enrollment,
-                attributes: [], // Enrollment doesn't need attributes, they're on trackedEntity
+                attributes: allAttributes,
             },
         ];
 
@@ -528,7 +538,9 @@ export class SyncManager {
      * Sync create/update events to DHIS2 API
      */
     private async syncCreateEvent(data: any): Promise<void> {
-        const allEvents = [data].map(({ dataValues, ...event }) => ({
+        const { dataValues, relationships, ...event } = data;
+
+        const allEvents = [{
             ...event,
             dataValues: Object.entries(dataValues || {}).flatMap(
                 ([dataElement, value]: [string, any]) => {
@@ -547,12 +559,20 @@ export class SyncManager {
                     return [];
                 },
             ),
-        }));
+        }];
+
+        // Build the payload with relationships if they exist
+        const payload: any = { events: allEvents };
+
+        if (relationships && relationships.length > 0) {
+            payload.relationships = relationships;
+            console.log("Including relationships with event:", relationships);
+        }
 
         await this.engine.mutate({
             resource: "tracker",
             type: "create",
-            data: { events: allEvents },
+            data: payload,
             params: { async: false },
         });
     }

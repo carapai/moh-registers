@@ -1,23 +1,25 @@
 import {
-    ExperimentOutlined,
-    EyeOutlined,
-    PlusOutlined,
+	CheckCircleOutlined,
+	ExclamationCircleOutlined,
+	ExperimentOutlined,
+	EyeOutlined,
+	PlusOutlined
 } from "@ant-design/icons";
 import {
-    Button,
-    Card,
-    Flex,
-    Form,
-    message,
-    Modal,
-    Row,
-    Table,
-    TableProps,
-    Typography,
+	Button,
+	Flex,
+	Form,
+	message,
+	Modal,
+	Row,
+	Table,
+	TableProps,
+	Typography,
 } from "antd";
 import dayjs from "dayjs";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { singular } from "pluralize";
+import React, { useCallback, useEffect, useState } from "react";
+import { useEventAutoSave } from "../hooks/useEventAutoSave";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
 import { ProgramStage } from "../schemas";
@@ -39,7 +41,9 @@ export const ProgramStageCapture: React.FC<{
     } = RootRoute.useLoaderData();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState(0);
-
+    const medicines = new Map(
+        optionSets.get("Fm205YyFeRg")?.map(({ code, name }) => [code, name]),
+    );
     const programStageDataElements = new Map(
         programStage.programStageDataElements.map((psde) => [
             psde.dataElement.id,
@@ -75,6 +79,23 @@ export const ProgramStageCapture: React.FC<{
         (state) => state.context.trackedEntity,
     );
 
+    // Initialize auto-save hook
+    const { triggerAutoSave, savingState, errorMessage, isEventCreated } =
+        useEventAutoSave({
+            form: stageForm,
+            event: currentEvent,
+            trackerActor,
+            ruleResult: ruleResult,
+            onEventCreated: (newEventId) => {
+                trackerActor.send({
+                    type: "UPDATE_EVENT_ID",
+                    oldId: currentEvent.event,
+                    newId: newEventId,
+                });
+                setModalKey(Number(newEventId) || 0);
+            },
+        });
+
     const currentDataElements = new Map(
         programStage.programStageDataElements.map((psde) => [
             psde.dataElement.id,
@@ -86,17 +107,6 @@ export const ProgramStageCapture: React.FC<{
             },
         ]),
     );
-    // Convert currentEvent dataValues to Ant Design fields format for controlled form
-    // const fields = useMemo(
-    //     () =>
-    //         Object.entries(currentEvent.dataValues || {}).map(
-    //             ([name, value]) => ({
-    //                 name,
-    //                 value,
-    //             }),
-    //         ),
-    //     [currentEvent.event, currentEvent.dataValues], // Include dataValues to properly recalculate when data changes
-    // );
 
     const events = TrackerContext.useSelector((state) =>
         state.context.trackedEntity?.events.filter(
@@ -141,13 +151,18 @@ export const ProgramStageCapture: React.FC<{
             key: "date",
             render: (date) => dayjs(date).format("MMM DD, YYYY"),
         },
-        ...programStage.programStageSections.flatMap((section) =>
-            section.dataElements.map((de) => ({
-                title: de.formName || de.name,
-                key: de.id,
-                dataIndex: ["dataValues", de.id],
-            })),
-        ),
+        ...programStage.programStageSections.flatMap((section) => {
+            return section.dataElements.map((de) => {
+                const currentDataElement = dataElements.get(de.id)!;
+                return {
+                    title:
+                        currentDataElement.formName || currentDataElement.name,
+                    key: de.id,
+                    dataIndex: ["dataValues", de.id],
+                    render: (value: string) => medicines.get(value) || value,
+                };
+            });
+        }),
         {
             title: "Action",
             key: "action",
@@ -219,8 +234,36 @@ export const ProgramStageCapture: React.FC<{
             Object.keys(ruleResult.assignments).length > 0
         ) {
             stageForm.setFieldsValue(ruleResult.assignments);
+
+            // Trigger auto-save for program rule assignments if event already created
+            // Only save assignments that belong to this stage
+            if (isEventCreated) {
+                const stageDataElementIds = new Set(
+                    programStage.programStageDataElements.map(
+                        (psde) => psde.dataElement.id,
+                    ),
+                );
+
+                Object.entries(ruleResult.assignments).forEach(
+                    ([key, value]) => {
+                        // Only trigger auto-save if this data element belongs to current stage
+                        if (stageDataElementIds.has(key)) {
+                            triggerAutoSave(key, value);
+                        }
+                    },
+                );
+            }
         }
-    }, [ruleResult.assignments, isVisitModalOpen, stageForm]);
+    }, [
+        ruleResult.assignments,
+        isVisitModalOpen,
+        stageForm,
+        isEventCreated,
+        triggerAutoSave,
+        programStage.programStageDataElements,
+    ]);
+
+    const [shouldCreateAgain, setShouldCreateAgain] = useState(false);
 
     const onStageSubmit = (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
@@ -250,9 +293,31 @@ export const ProgramStageCapture: React.FC<{
                 type: "CREATE_OR_UPDATE_EVENT",
                 event,
             });
-            stageForm.resetFields();
-            trackerActor.send({ type: "RESET_CURRENT_EVENT" });
-            setIsVisitModalOpen(false);
+
+            // Check if we should create another record
+            if (shouldCreateAgain) {
+                // Reset the flag
+                setShouldCreateAgain(false);
+                // Reset form and create new event
+                stageForm.resetFields();
+                trackerActor.send({ type: "RESET_CURRENT_EVENT" });
+                // Show success message
+                message.success({
+                    content: `${singular(programStage.name)} saved successfully!`,
+                    duration: 2,
+                });
+                // Create a new empty event
+                showCreateVisitModal();
+            } else {
+                // Close modal and reset
+                setIsVisitModalOpen(false);
+                stageForm.resetFields();
+                trackerActor.send({ type: "RESET_CURRENT_EVENT" });
+                message.success({
+                    content: `${singular(programStage.name)} saved successfully!`,
+                    duration: 2,
+                });
+            }
         } catch (error) {
             console.error("Error saving record:", error);
             message.error({
@@ -262,12 +327,16 @@ export const ProgramStageCapture: React.FC<{
         }
     };
 
-    const handleSubmit = async () => {
+    const handleSubmit = async (createAgain: boolean = false) => {
         try {
+            // Set the flag before submitting
+            setShouldCreateAgain(createAgain);
             await stageForm.validateFields();
             stageForm.submit();
         } catch (error) {
             console.error("Form validation failed:", error);
+            // Reset the flag if validation fails
+            setShouldCreateAgain(false);
         }
     };
 
@@ -361,37 +430,89 @@ export const ProgramStageCapture: React.FC<{
                 width="70vw"
                 footer={
                     <Flex
-                        justify="end"
+                        justify="space-between"
+                        align="center"
                         gap="middle"
                         style={{ padding: "8px 0" }}
                     >
-                        <Button
-                            onClick={() => {
-                                stageForm.resetFields();
-                                trackerActor.send({
-                                    type: "RESET_CURRENT_EVENT",
-                                });
-                                setIsVisitModalOpen(false);
-                            }}
-                            style={{ borderRadius: 8 }}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            type="primary"
-                            onClick={handleSubmit}
-                            style={{
-                                background:
-                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
-                                borderColor: "#7c3aed",
-                                borderRadius: 8,
-                                fontWeight: 500,
-                                paddingLeft: 28,
-                                paddingRight: 28,
-                            }}
-                        >
-                            Save {singular(programStage.name)}
-                        </Button>
+                        <Flex>
+														&nbsp;&nbsp;
+                            {savingState !== "idle" && (
+                                <Flex align="center" gap="small">
+                                    {savingState === "saved" && (
+                                        <>
+                                            <CheckCircleOutlined
+                                                style={{ color: "#52c41a" }}
+                                            />
+                                            <Text
+                                                type="success"
+                                                style={{ fontSize: 12 }}
+                                            >
+                                                Saved
+                                            </Text>
+                                        </>
+                                    )}
+                                    {savingState === "error" && (
+                                        <>
+                                            <ExclamationCircleOutlined
+                                                style={{ color: "#faad14" }}
+                                            />
+                                            <Text
+                                                type="warning"
+                                                style={{ fontSize: 12 }}
+                                            >
+                                                {errorMessage}
+                                            </Text>
+                                        </>
+                                    )}
+                                </Flex>
+                            )}
+                        </Flex>
+                        <Flex gap="middle">
+                            <Button
+                                onClick={() => {
+                                    stageForm.resetFields();
+                                    trackerActor.send({
+                                        type: "RESET_CURRENT_EVENT",
+                                    });
+                                    setIsVisitModalOpen(false);
+                                }}
+                                style={{ borderRadius: 8 }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={() => handleSubmit()}
+                                style={{
+                                    background:
+                                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 8,
+                                    fontWeight: 500,
+                                    paddingLeft: 28,
+                                    paddingRight: 28,
+                                }}
+                            >
+                                Save {singular(programStage.name)} & Close
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={() => handleSubmit(true)}
+                                style={{
+                                    background:
+                                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 8,
+                                    fontWeight: 500,
+                                    paddingLeft: 28,
+                                    paddingRight: 28,
+                                }}
+                            >
+                                Save {singular(programStage.name)} & Create
+                                Another
+                            </Button>
+                        </Flex>
                     </Flex>
                 }
                 styles={{
@@ -539,6 +660,9 @@ export const ProgramStageCapture: React.FC<{
                                                         form={stageForm}
                                                         onTriggerProgramRules={
                                                             handleTriggerProgramRules
+                                                        }
+                                                        onAutoSave={
+                                                            triggerAutoSave
                                                         }
                                                     />
                                                 );

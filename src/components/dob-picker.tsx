@@ -29,10 +29,12 @@ export default function DobPicker({
     form,
     dataElement,
     onTriggerProgramRules,
+    onAutoSave,
 }: {
     form: FormInstance<any>;
     dataElement: DataElement | TrackedEntityAttribute;
     onTriggerProgramRules?: () => void;
+    onAutoSave?: (dataElementId: string, value: any) => void;
 }) {
     const [years, setYears] = useState<number | null>(null);
     const [months, setMonths] = useState<number | null>(null);
@@ -52,8 +54,10 @@ export default function DobPicker({
             newDays ?? 0,
         );
         // Store as string immediately
-        form.setFieldValue(dataElement.id, calculatedDob.format('YYYY-MM-DD'));
+        const dobString = calculatedDob.format('YYYY-MM-DD');
+        form.setFieldValue(dataElement.id, dobString);
         onTriggerProgramRules?.();
+        onAutoSave?.(dataElement.id, dobString);
     };
 
     const handleDateChange = (date: dayjs.Dayjs | null) => {
@@ -63,14 +67,18 @@ export default function DobPicker({
             setMonths(age.months);
             setDays(age.days);
             // Store as string immediately
-            form.setFieldValue(dataElement.id, date.format('YYYY-MM-DD'));
+            const dobString = date.format('YYYY-MM-DD');
+            form.setFieldValue(dataElement.id, dobString);
+            onTriggerProgramRules?.();
+            onAutoSave?.(dataElement.id, dobString);
         } else {
             setYears(null);
             setMonths(null);
             setDays(null);
             form.setFieldValue(dataElement.id, null);
+            onTriggerProgramRules?.();
+            onAutoSave?.(dataElement.id, null);
         }
-        onTriggerProgramRules?.();
     };
 
     // Get the field value and convert to dayjs if it's a string

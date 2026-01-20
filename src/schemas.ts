@@ -1,5 +1,6 @@
 import { GetProp, TablePaginationConfig, TreeSelectProps } from "antd";
 import { FilterValue } from "antd/es/table/interface";
+import Base from "antd/es/typography/Base";
 import z from "zod";
 
 const RenderTypeSchema = z.object({
@@ -307,7 +308,11 @@ export const TrackedEntitySchema = BasicTrackedEntitySchema.extend({
     relationships: z.array(
         z.object({
             relationship: z.string(),
+						relationshipType: z.string(),
             to: z.object({
+                trackedEntity: BasicTrackedEntitySchema,
+            }),
+            from: z.object({
                 trackedEntity: BasicTrackedEntitySchema,
             }),
         }),
@@ -334,29 +339,6 @@ export const EventResponseSchema = z.object({
     events: z.array(EventSchema),
 });
 
-export const FDataElementSchema = DataElementSchema.extend({
-    programStage: z.string(),
-    programSection: z.string(),
-    compulsory: z.boolean(),
-    allowFutureDate: z.boolean(),
-    sortOrder: z.number(),
-    section: z.string(),
-    renderType: z
-        .object({
-            MOBILE: z.object({ type: z.string() }),
-            DESKTOP: z.object({ type: z.string() }),
-        })
-        .optional(),
-});
-
-export const FAttributeSchema = TrackedEntityAttributeSchema.extend({
-    sortOrder: z.number(),
-    mandatory: z.boolean(),
-    program: z.string(),
-    displayInList: z.boolean(),
-    section: z.string(),
-});
-
 export type Client = z.infer<typeof ClientSchema>;
 export type Program = z.infer<typeof ProgramSchema>;
 export type ProgramStage = z.infer<typeof ProgramStageSchema>;
@@ -370,6 +352,7 @@ export type ProgramRule = z.infer<typeof ProgramRuleSchema>;
 export type ProgramRuleAction = z.infer<typeof ProgramRuleActionSchema>;
 export type ProgramRuleVariable = z.infer<typeof ProgramRuleVariableSchema>;
 export type OrgUnit = z.infer<typeof OrgUnitSchema>;
+export type BasicTrackedEntity = z.infer<typeof BasicTrackedEntitySchema>;
 export type TrackedEntity = z.infer<typeof TrackedEntitySchema>;
 export type TrackedEntityResponse = z.infer<typeof TrackedEntityResponseSchema>;
 export type Event = z.infer<typeof EventSchema>;
@@ -382,9 +365,6 @@ export type TrackedEntityAttribute = z.infer<
 >;
 export type EventResponse = z.infer<typeof EventResponseSchema>;
 export type ProgramSection = z.infer<typeof ProgramSectionSchema>;
-
-export type FDataElement = z.infer<typeof FDataElementSchema>;
-export type FAttribute = z.infer<typeof FAttributeSchema>;
 export type RenderType = z.infer<typeof RenderTypeSchema>;
 
 export type Message = {

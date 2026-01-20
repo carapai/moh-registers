@@ -114,6 +114,81 @@ export async function saveRelationship(
 }
 
 /**
+ * Get relationships by entity ID
+ */
+export async function getRelationshipsByEntity(
+    entityId: string,
+    entityType: "trackedEntity" | "event",
+): Promise<FlattenedRelationship[]> {
+    if (entityType === "trackedEntity") {
+        return await db.relationships
+            .where("from.trackedEntity.trackedEntity")
+            .equals(entityId)
+            .toArray();
+    } else {
+        return await db.relationships
+            .where("from.event.event")
+            .equals(entityId)
+            .toArray();
+    }
+}
+
+/**
+ * Populate relationships for an entity with full child entity data
+ * Converts flattened tracked entity to BasicTrackedEntity format
+ */
+export async function populateRelationshipsForEntity(
+    entityId: string,
+): Promise<FlattenedRelationship[]> {
+    const relationships = await getRelationshipsByEntity(
+        entityId,
+        "trackedEntity",
+    );
+
+    // Fetch referenced entities and convert to BasicTrackedEntity format
+    const populated = await Promise.all(
+        relationships.map(async (rel) => {
+            if (rel.to.trackedEntity) {
+                const toEntity = await db.trackedEntities.get(
+                    rel.to.trackedEntity.trackedEntity,
+                );
+
+                if (toEntity) {
+                    // Convert flattened entity to BasicTrackedEntity format
+                    // The tabs component expects enrollments as an array
+                    const basicEntity = {
+                        ...toEntity,
+                        // Convert attributes from object to array format
+                        attributes: Object.entries(toEntity.attributes || {}).map(
+                            ([attribute, value]) => ({
+                                attribute,
+                                value: String(value),
+                                valueType: "TEXT",
+                                createdAt: toEntity.createdAt,
+                                updatedAt: toEntity.updatedAt,
+                            }),
+                        ),
+                        // Convert enrollment (singular) to enrollments (plural array)
+                        enrollments: toEntity.enrollment ? [toEntity.enrollment] : [],
+                    };
+
+                    return {
+                        ...rel,
+                        to: {
+                            ...rel.to,
+                            trackedEntity: basicEntity as any, // Mixed type for UI compatibility
+                        },
+                    };
+                }
+            }
+            return rel;
+        }),
+    );
+
+    return populated;
+}
+
+/**
  * Get an event by ID
  */
 export async function getEvent(

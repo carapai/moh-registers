@@ -100,7 +100,7 @@ export class RegisterDatabase extends Dexie {
     constructor() {
         super("MOHRegisterDB");
 
-        this.version(1).stores({
+        this.version(2).stores({
             // TrackedEntities table
             // Primary key: trackedEntity
             // Indexed fields: orgUnit, updatedAt (for querying and sorting)
@@ -114,8 +114,8 @@ export class RegisterDatabase extends Dexie {
 
             // Relationship table
             // Primary key: relationship
-            // Indexed fields: relationship
-            relationships: "relationship",
+            // Indexed fields: from.trackedEntity.trackedEntity, from.event.event (for querying relationships by source)
+            relationships: "relationship,from.trackedEntity.trackedEntity,from.event.event",
             relationshipTypes: "id",
 
             // TrackedEntity drafts table

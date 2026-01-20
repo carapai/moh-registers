@@ -56,6 +56,7 @@ interface TrackerContext {
     modalState: "closed" | "creating" | "viewing" | "editing";
     syncManager?: SyncManager;
     message: MessageInstance;
+    pendingChildRelationships?: FlattenedRelationship[];
 }
 
 type TrackerEvents =
@@ -74,8 +75,20 @@ type TrackerEvents =
           relationship: FlattenedRelationship;
       }
     | {
+          type: "ADD_CHILD_RELATIONSHIP";
+          relationship: FlattenedRelationship;
+      }
+    | {
+          type: "SET_RELATIONSHIPS";
+          relationships: FlattenedRelationship[];
+      }
+    | {
           type: "SET_TRACKED_ENTITY";
           trackedEntity: FlattenedTrackedEntity;
+      }
+    | {
+          type: "SET_CHILD_ENTITY";
+          childEntity: FlattenedTrackedEntity;
       }
     | {
           type: "SET_TRACKED_ENTITIES";
@@ -153,6 +166,11 @@ type TrackerEvents =
               | "childEvent"
               | "mainEvent";
           updateKey: "dataValues" | "attributes";
+      }
+    | {
+          type: "UPDATE_EVENT_ID";
+          oldId: string;
+          newId: string;
       }
     | {
           type: "RESET_REGISTRATION_FORM";
@@ -263,6 +281,22 @@ export const trackerMachine = setup({
             }
             return relationship;
         }),
+
+        createChildRelationships: fromPromise<
+            void,
+            {
+                syncManager?: SyncManager;
+                relationships: FlattenedRelationship[];
+            }
+        >(async ({ input: { syncManager, relationships } }) => {
+            console.log("💾 Saving child relationships:", relationships);
+            for (const relationship of relationships) {
+                await saveRelationship(relationship);
+                if (syncManager) {
+                    await syncManager.queueCreateRelationship(relationship, 9);
+                }
+            }
+        }),
     },
     actions: {
         gotoEntities: ({ context }) => {
@@ -358,6 +392,29 @@ export const trackerMachine = setup({
         }),
         resetChildEventRules: assign({
             childEventRuleResults: () => createEmptyProgramRuleResult(),
+        }),
+
+        addChildRelationship: assign({
+            trackedEntity: ({ context, event }) => {
+                assertEvent(event, "ADD_CHILD_RELATIONSHIP");
+                return {
+                    ...context.trackedEntity,
+                    relationships: [
+                        ...(context.trackedEntity.relationships || []),
+                        event.relationship,
+                    ],
+                };
+            },
+        }),
+
+        setRelationships: assign({
+            trackedEntity: ({ context, event }) => {
+                assertEvent(event, "SET_RELATIONSHIPS");
+                return {
+                    ...context.trackedEntity,
+                    relationships: event.relationships,
+                };
+            },
         }),
 
         setModalCreating: assign({
@@ -616,6 +673,14 @@ export const trackerMachine = setup({
                         }),
                     ],
                 },
+                SET_CHILD_ENTITY: {
+                    actions: [
+                        assign({
+                            childTrackedEntity: ({ event }) =>
+                                event.childEntity,
+                        }),
+                    ],
+                },
 
                 CREATE_TRACKED_ENTITY: {
                     target: "saveTrackedEntity",
@@ -645,6 +710,9 @@ export const trackerMachine = setup({
 
                 RESET_PROGRAM_RULES: {
                     actions: "resetAllProgramRules",
+                },
+                SET_RELATIONSHIPS: {
+                    actions: "setRelationships",
                 },
                 TOGGLE_ATTRIBUTE_COLUMN: {
                     // actions: assign({
@@ -740,6 +808,12 @@ export const trackerMachine = setup({
                 CREATE_RELATIONSHIP: {
                     target: "saveRelationship",
                 },
+                ADD_CHILD_RELATIONSHIP: {
+                    actions: "addChildRelationship",
+                },
+                SET_RELATIONSHIPS: {
+                    actions: "setRelationships",
+                },
                 RESET_TRACKED_ENTITY: {
                     actions: [
                         assign({
@@ -752,6 +826,17 @@ export const trackerMachine = setup({
                     ],
                 },
                 RESET_CHILD_ENTITY: {
+                    actions: [
+                        assign({
+                            childTrackedEntity: ({ context }) =>
+                                createEmptyTrackedEntity({
+                                    orgUnit: context.orgUnit.id,
+                                }),
+                        }),
+                        "resetChildRegistrationRules",
+                    ],
+                },
+                SET_CHILD_ENTITY: {
                     actions: [
                         assign({
                             childTrackedEntity: ({ context }) =>
@@ -790,6 +875,43 @@ export const trackerMachine = setup({
                             },
                         }),
                         "resetMainEventRules",
+                    ],
+                },
+                UPDATE_EVENT_ID: {
+                    actions: [
+                        assign({
+                            trackedEntity: ({ context, event }) => {
+                                return {
+                                    ...context.trackedEntity,
+                                    events: context.trackedEntity.events.map(
+                                        (e) =>
+                                            e.event === event.oldId
+                                                ? { ...e, event: event.newId }
+                                                : e,
+                                    ),
+                                };
+                            },
+                            mainEvent: ({ context, event }) => {
+                                if (context.mainEvent?.event === event.oldId) {
+                                    return {
+                                        ...context.mainEvent,
+                                        event: event.newId,
+                                    };
+                                }
+                                return context.mainEvent;
+                            },
+                            currentEvent: ({ context, event }) => {
+                                if (
+                                    context.currentEvent?.event === event.oldId
+                                ) {
+                                    return {
+                                        ...context.currentEvent,
+                                        event: event.newId,
+                                    };
+                                }
+                                return context.currentEvent;
+                            },
+                        }),
                     ],
                 },
 
@@ -874,7 +996,15 @@ export const trackerMachine = setup({
         },
 
         saveChildTrackedEntity: {
-            entry: "showSavingNotification",
+            entry: [
+                "showSavingNotification",
+                assign({
+                    pendingChildRelationships: ({ event }) => {
+                        assertEvent(event, "CREATE_TRACKED_CHILD_ENTITY");
+                        return event.trackedEntity.relationships || [];
+                    },
+                }),
+            ],
             invoke: {
                 src: "createOrUpdateTrackedEntity",
                 input: ({ context: { syncManager }, event }) => {
@@ -884,16 +1014,76 @@ export const trackerMachine = setup({
                         trackedEntity: event.trackedEntity,
                     };
                 },
-                onDone: {
-                    actions: "showSuccessNotification",
-                },
+                onDone: [
+                    {
+                        // If the child has relationships, transition to save relationships
+                        guard: ({ context }) => {
+                            return !!(
+                                context.pendingChildRelationships &&
+                                context.pendingChildRelationships.length > 0
+                            );
+                        },
+                        target: "saveChildRelationships",
+                        actions: "showSuccessNotification",
+                    },
+                    {
+                        // If no relationships, go directly to success
+                        target: "entitySuccess",
+                        actions: "showSuccessNotification",
+                    },
+                ],
                 onError: {
+                    target: "entitySuccess",
                     actions: [
                         assign({
                             error: ({ event }) =>
                                 event.error instanceof Error
                                     ? event.error.message
                                     : String(event.error),
+                            pendingChildRelationships: undefined,
+                        }),
+                        "showErrorNotification",
+                    ],
+                },
+            },
+        },
+
+        saveChildRelationships: {
+            invoke: {
+                src: "createChildRelationships",
+                input: ({
+                    context: { syncManager, pendingChildRelationships },
+                }) => {
+                    return {
+                        syncManager,
+                        relationships: pendingChildRelationships || [],
+                    };
+                },
+                onDone: {
+                    target: "entitySuccess",
+                    actions: [
+                        assign({
+                            // Add the saved relationships to the mother's relationships array
+                            trackedEntity: ({ context }) => ({
+                                ...context.trackedEntity,
+                                relationships: [
+                                    ...(context.trackedEntity.relationships || []),
+                                    ...(context.pendingChildRelationships || []),
+                                ],
+                            }),
+                            pendingChildRelationships: undefined,
+                        }),
+                    ],
+                },
+                onError: {
+                    target: "entitySuccess",
+                    actions: [
+                        assign({
+                            error: ({ event }) =>
+                                event.error instanceof Error
+                                    ? event.error.message
+                                    : String(event.error),
+                            pendingChildRelationships: undefined,
                         }),
                         "showErrorNotification",
                     ],
@@ -912,9 +1102,11 @@ export const trackerMachine = setup({
                     };
                 },
                 onDone: {
+                    target: "entitySuccess",
                     actions: "showSuccessNotification",
                 },
                 onError: {
+                    target: "entitySuccess",
                     actions: [
                         assign({
                             error: ({ event }) =>

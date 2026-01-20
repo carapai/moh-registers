@@ -209,7 +209,6 @@ export function executeProgramRules({
         },
 
         monthsBetween: (date1: string, date2: string): number => {
-            
             const d1 = dayjs(date1);
             const d2 = dayjs(date2);
             return d2.diff(d1, "months");
@@ -678,9 +677,9 @@ export function executeProgramRules({
             }
         }
         const isTrue = evaluateCondition(rule.condition);
-        console.log(
-            `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
-        );
+        // console.log(
+        //     `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
+        // );
         if (!isTrue) {
             continue;
         }
@@ -922,13 +921,18 @@ export const createEmptyEvent = ({
         deleted: false,
         createdAt: dayjs().format("YYYY-MM-DD"),
         updatedAt: dayjs().format("YYYY-MM-DD"),
+        relationships: [],
     };
 };
 
 export const createNormalize = (valueType: string | undefined) => {
     const normalize: FormItemProps["normalize"] = (value) => {
-        if (isDate(valueType) && dayjs.isDayjs(value)) {
+        if (valueType === "DATETIME" && dayjs.isDayjs(value)) {
+            return value.format("YYYY-MM-DDTHH:mm:ss");
+        } else if (valueType === "DATE" && dayjs.isDayjs(value)) {
             return value.format("YYYY-MM-DD");
+        } else if (valueType === "TIME" && dayjs.isDayjs(value)) {
+            return value.format("HH:mm:ss");
         } else if (valueType === "AGE" && dayjs.isDayjs(value)) {
             return value.format("YYYY-MM-DD");
         } else if (value && valueType === "MULTI_TEXT") {

@@ -17,7 +17,7 @@
         "@tanstack/react-router": "^1.139.3",
         "@tanstack/router-cli": "^1.139.3",
         "@xstate/react": "^6.0.0",
-        "antd": "^6.0.0",
+        "antd": "^6.2.0",
         "dexie": "^4.2.1",
         "dexie-react-hooks": "^4.2.0",
         "lodash": "^4.17.21",

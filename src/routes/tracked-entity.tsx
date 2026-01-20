@@ -1,7 +1,10 @@
 import {
     CalendarOutlined,
     CaretRightOutlined,
+    CheckCircleOutlined,
+    ExclamationCircleOutlined,
     EyeOutlined,
+    LoadingOutlined,
     MedicineBoxOutlined,
     PlusOutlined,
     UserAddOutlined,
@@ -29,12 +32,22 @@ import {
     message,
 } from "antd";
 import dayjs from "dayjs";
+import { orderBy } from "lodash";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DataElementField } from "../components/data-element-field";
 import { ProgramStageCapture } from "../components/program-stage-capture";
+import RelationshipEvent from "../components/relationship-event";
 import { FlattenedEvent } from "../db";
+import {
+    getEventDraft,
+    populateRelationshipsForEntity,
+} from "../db/operations";
+import { useAutoSave } from "../hooks/useAutoSave";
+import { useEventAutoSave } from "../hooks/useEventAutoSave";
 import { useTrackerState } from "../hooks/useTrackerState";
 import { TrackerContext } from "../machines/tracker";
+import { RenderType } from "../schemas";
+import { generateUid } from "../utils/id";
 import {
     createEmptyEvent,
     createEmptyTrackedEntity,
@@ -43,12 +56,6 @@ import {
     flattenTrackedEntity,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
-import { useAutoSave } from "../hooks/useAutoSave";
-import { getEventDraft } from "../db/operations";
-import { orderBy } from "lodash";
-import { RenderType } from "../schemas";
-import { generateUid } from "../utils/id";
-import RelationshipEvent from "../components/relationship-event";
 export const TrackedEntityRoute = createRoute({
     getParentRoute: () => RootRoute,
     path: "/tracked-entity/$trackedEntity",
@@ -56,6 +63,17 @@ export const TrackedEntityRoute = createRoute({
 });
 
 const { Text } = Typography;
+
+const stages: Map<string, number> = new Map([
+    ["x5x1cHHjg00", 7],
+    ["opwSN351xGC", 5],
+    ["dyt37jxHYGv", 6],
+    ["VzKe0OzKS8O", 1],
+    ["zKGWob5AZKP", 3],
+    ["K2nxbE9ubSs", 2],
+    ["DA0Yt3V16AN", 4],
+    ["wmPg6qplttg", 8],
+]);
 
 function TrackedEntity() {
     const {
@@ -67,7 +85,6 @@ function TrackedEntity() {
         programRules,
         programRuleVariables,
         programOrgUnits,
-        motherChildRelation,
     } = RootRoute.useLoaderData();
     const trackerActor = TrackerContext.useActorRef();
     const orgUnit = TrackerContext.useSelector(
@@ -92,8 +109,33 @@ function TrackedEntity() {
     const trackedEntity = TrackerContext.useSelector(
         (state) => state.context.trackedEntity,
     );
+    // Load relationships from database on component mount
+    useEffect(() => {
+        async function loadRelationships() {
+            if (!trackedEntity.trackedEntity) return;
 
-    const state = TrackerContext.useSelector((s) => s.value);
+            try {
+                const relationships = await populateRelationshipsForEntity(
+                    trackedEntity.trackedEntity,
+                );
+
+                if (relationships.length > 0) {
+                    console.log(
+                        `📊 Loaded ${relationships.length} relationships for tracked entity`,
+                        relationships,
+                    );
+                    trackerActor.send({
+                        type: "SET_RELATIONSHIPS",
+                        relationships: relationships,
+                    });
+                }
+            } catch (error) {
+                console.error("Failed to load relationships:", error);
+            }
+        }
+
+        loadRelationships();
+    }, [trackedEntity.trackedEntity, trackerActor]);
 
     const dataElementToAttributeMap: Record<string, string> = {
         KJ2V2JlOxFi: "Y3DE5CZWySr",
@@ -156,7 +198,7 @@ function TrackedEntity() {
         draftId: mainEvent.event,
         type: "event",
         interval: 30000,
-        enabled: isVisitModalOpen,
+        enabled: false,
         metadata: {
             trackedEntity: enrollment.trackedEntity,
             programStage: "K2nxbE9ubSs",
@@ -167,6 +209,23 @@ function TrackedEntity() {
         },
         onSave: () => console.log("💾 Visit draft auto-saved"),
     });
+
+    const { triggerAutoSave, savingState, errorMessage, isEventCreated } =
+        useEventAutoSave({
+            form: visitForm,
+            event: mainEvent,
+            trackerActor,
+            ruleResult: ruleResult,
+            onEventCreated: (newEventId) => {
+                trackerActor.send({
+                    type: "UPDATE_EVENT_ID",
+                    oldId: mainEvent.event,
+                    newId: newEventId,
+                });
+                setModalKey(newEventId);
+            },
+        });
+
     const onVisitSubmit = async (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
             console.error(
@@ -264,7 +323,6 @@ function TrackedEntity() {
                     trackedEntity.attributes[attributeId];
             }
         });
-
         // Get current form values from visit form
         const currentFormValues = visitForm.getFieldsValue();
         // Map data elements to attributes
@@ -325,66 +383,190 @@ function TrackedEntity() {
 
     const handleNestedSubmit = async (values: any) => {
         try {
-            const newTrackedEntity: ReturnType<typeof flattenTrackedEntity> = {
-                ...createEmptyTrackedEntity({
-                    orgUnit: enrollment.orgUnit,
-                }),
-                attributes: values,
-            };
-            const relationship = {
-                relationshipType: "vDnDNhGRzzy",
-                relationship: generateUid(),
-                from: {
-                    trackedEntity: {
-                        trackedEntity: mainEvent.trackedEntity,
-                    },
-                },
-                to: {
-                    trackedEntity: {
-                        trackedEntity: newTrackedEntity.trackedEntity,
-                        attributes:
-                            motherChildRelation.toConstraint.trackerDataView.attributes.flatMap(
-                                (a) => {
-                                    if (values[a]) {
-                                        return {
-                                            attribute: a,
-                                            value: values[a],
-                                        };
-                                    }
-                                    return [];
-                                },
-                            ),
-                    },
-                },
-            };
-            trackerActor.send({
-                type: "CREATE_TRACKED_CHILD_ENTITY",
-                trackedEntity: newTrackedEntity,
-            });
-            // trackerActor.send({
-            //     type: "CREATE_RELATIONSHIP",
-            // 		relationship
-            // });
+            console.log("📝 Child registration form values:", values);
+
+            // Check if we have any values
+            if (!values || Object.keys(values).length === 0) {
+                console.error("❌ No form values provided!");
+                message.error({
+                    content: "No data to save. Please fill in the form.",
+                    duration: 3,
+                });
+                return;
+            }
+
+            // Check for duplicate child (same birth date)
+            const birthDate = values["Y3DE5CZWySr"]; // Birth date attribute
+            if (birthDate) {
+                const existingRelationships =
+                    await populateRelationshipsForEntity(
+                        mainEvent.trackedEntity,
+                    );
+
+                const duplicate = existingRelationships.find((rel) => {
+                    const child = rel.to.trackedEntity;
+                    // Check if child has attributes
+                    if (child.attributes) {
+                        // Handle both flattened format (object) and API format (array)
+                        const childBirthDate = Array.isArray(child.attributes)
+                            ? child.attributes.find(
+                                  (a) => a.attribute === "Y3DE5CZWySr",
+                              )?.value
+                            : child.attributes["Y3DE5CZWySr"];
+                        return childBirthDate === birthDate;
+                    }
+                    return false;
+                });
+
+                if (duplicate) {
+                    // Show confirmation dialog
+                    Modal.confirm({
+                        title: "Possible Duplicate Child",
+                        content: `A child with birth date ${dayjs(birthDate).format("MMM DD, YYYY")} already exists. Do you want to continue?`,
+                        okText: "Continue Anyway",
+                        cancelText: "Cancel",
+                        onOk: async () => {
+                            // User confirmed, proceed with creation
+                            await createChildEntity(values);
+                        },
+                        onCancel: () => {
+                            console.log(
+                                "Child registration cancelled due to duplicate",
+                            );
+                        },
+                    });
+                    return; // Exit early, will continue in modal callback if confirmed
+                }
+            }
+
+            // No duplicate, proceed with creation
+            await createChildEntity(values);
         } catch (error) {
-            console.error("Error creating child:", error);
+            console.error("❌ Error creating child:", error);
             message.error({
-                content: "Failed to register child. Please try again.",
+                content: `Failed to register child: ${error instanceof Error ? error.message : "Unknown error"}`,
                 duration: 5,
             });
         }
     };
 
+    // Extract child creation logic to separate function
+    const createChildEntity = async (values: any) => {
+        try {
+            const childTrackedEntity = createEmptyTrackedEntity({
+                orgUnit: enrollment.orgUnit,
+            });
+
+            // Create child tracked entity first
+            const newTrackedEntity: ReturnType<typeof flattenTrackedEntity> = {
+                ...childTrackedEntity,
+                attributes: values,
+            };
+
+            // Convert flattened structure to BasicTrackedEntity format for the relationship
+            // The tabs component expects enrollments as an array
+            const childForRelationship = {
+                ...newTrackedEntity,
+                attributes: Object.entries(values).map(
+                    ([attribute, value]) => ({
+                        attribute,
+                        value: String(value),
+                        valueType: "TEXT",
+                        createdAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+                        updatedAt: dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ"),
+                    }),
+                ),
+                enrollments: [newTrackedEntity.enrollment],
+            };
+
+            // Create the relationship structure with both from (parent) and to (child)
+            // Include the full child entity in the relationship for immediate UI update
+            const relationship = {
+                relationship: generateUid(),
+                relationshipType: "vDnDNhGRzzy",
+                from: {
+                    trackedEntity: {
+                        trackedEntity: mainEvent.trackedEntity, // Parent/mother ID
+                    },
+                },
+                to: {
+                    trackedEntity: childForRelationship, // Full child entity for tabs
+                },
+            };
+
+            // Add relationship to child for saving
+            newTrackedEntity.relationships = [relationship] as any;
+
+            console.log("👶 New child tracked entity with relationship:", {
+                trackedEntity: newTrackedEntity.trackedEntity,
+                orgUnit: newTrackedEntity.orgUnit,
+                trackedEntityType: newTrackedEntity.trackedEntityType,
+                attributes: newTrackedEntity.attributes,
+                relationships: newTrackedEntity.relationships,
+            });
+
+            // Send child entity creation with relationship included
+            // The state machine will automatically add the relationship to the mother's
+            // relationships array after saving
+            trackerActor.send({
+                type: "CREATE_TRACKED_CHILD_ENTITY",
+                trackedEntity: newTrackedEntity,
+            });
+
+            message.success({
+                content: "Child registered successfully!",
+                duration: 3,
+            });
+
+            console.log("✅ Child registration actions sent to state machine");
+        } catch (error) {
+            console.error("❌ Error creating child:", error);
+            message.error({
+                content: `Failed to register child: ${error instanceof Error ? error.message : "Unknown error"}`,
+                duration: 5,
+            });
+        }
+    };
+
+    const [shouldCreateAnotherChild, setShouldCreateAnotherChild] =
+        useState(false);
+
     const handleNestedFormSubmit = async (createAnother: boolean = false) => {
         try {
-            await nestedForm.validateFields();
-            nestedForm.submit();
+            console.log("🔄 Validating nested form...");
+
+            // Set the flag before submitting
+            setShouldCreateAnotherChild(createAnother);
+
+            // Get all form field values before validation
+            const allFieldValues = nestedForm.getFieldsValue();
+            console.log(
+                "📋 All form field values before validation:",
+                allFieldValues,
+            );
+
+            const values = await nestedForm.validateFields();
+            console.log("✅ Validation passed, form values:", values);
+
+            // Manually call handleNestedSubmit with the validated values
+            await handleNestedSubmit(values);
+
             closeNestedModal();
 
-            if (createAnother) {
+            if (shouldCreateAnotherChild) {
+                // Reset the flag
+                setShouldCreateAnotherChild(false);
+                // Open the modal again for another child
                 openNestedModal();
             }
         } catch (error) {
-            console.error("Nested form validation failed:", error);
+            console.error("❌ Nested form validation failed:", error);
+            // Reset the flag if validation fails
+            setShouldCreateAnotherChild(false);
+            message.error({
+                content: "Please fill in all required fields",
+                duration: 3,
+            });
         }
     };
     // ✅ OPTIMIZED: Memoized columns prevent Table re-renders
@@ -400,17 +582,20 @@ function TrackedEntity() {
                 title: "Services",
                 dataIndex: ["dataValues", "mrKZWf2WMIC"],
                 key: "services",
-                render: (text) => (
-                    <Flex gap="small" align="center" wrap>
-                        {text.split(",").map((tag) => {
-                            return (
-                                <Tag key={tag} color="blue">
-                                    {tag.toUpperCase()}
-                                </Tag>
-                            );
-                        })}
-                    </Flex>
-                ),
+                render: (text) => {
+                    if (!text || typeof text !== "string") return null;
+                    return (
+                        <Flex gap="small" align="center" wrap>
+                            {text.split(",").map((tag) => {
+                                return (
+                                    <Tag key={tag} color="blue">
+                                        {tag.toUpperCase()}
+                                    </Tag>
+                                );
+                            })}
+                        </Flex>
+                    );
+                },
             },
             {
                 title: "Action",
@@ -506,7 +691,10 @@ function TrackedEntity() {
                             programRules: programRules,
                             programRuleVariables: programRuleVariables,
                             programStage: mainEvent.programStage,
-                            dataValues: { ...initialFormValues, ...draft.dataValues },
+                            dataValues: {
+                                ...initialFormValues,
+                                ...draft.dataValues,
+                            },
                             attributeValues: trackedEntity.attributes,
                             ruleResultKey: "mainEventRuleResults",
                             enrollment: trackedEntity.enrollment,
@@ -555,6 +743,15 @@ function TrackedEntity() {
         if (isVisitModalOpen) {
             if (Object.keys(ruleResult.assignments).length > 0) {
                 visitForm.setFieldsValue(ruleResult.assignments);
+
+                // Trigger auto-save for program rule assignments if event already created
+                if (isEventCreated) {
+                    Object.entries(ruleResult.assignments).forEach(
+                        ([key, value]) => {
+                            triggerAutoSave(key, value);
+                        },
+                    );
+                }
             }
             if (ruleResult.hiddenOptions["QwsvSPpnRul"]) {
                 setServiceTypes((prev) =>
@@ -567,7 +764,13 @@ function TrackedEntity() {
                 );
             }
         }
-    }, [ruleResult, isVisitModalOpen, visitForm]);
+    }, [
+        ruleResult,
+        isVisitModalOpen,
+        visitForm,
+        isEventCreated,
+        triggerAutoSave,
+    ]);
 
     const [activeKey, setActiveKey] = useState<string>(
         "K2nxbE9ubSs-bnV62fxQmoE",
@@ -742,7 +945,7 @@ function TrackedEntity() {
                             <MedicineBoxOutlined style={{ fontSize: 18 }} />
                         </div>
                         <Text strong style={{ fontSize: 18 }}>
-                            Visit - {state}
+                            Visit
                         </Text>
                     </Flex>
                 }
@@ -768,6 +971,53 @@ function TrackedEntity() {
                                         : "Not set"}
                                 </Text>
                             </Text>
+
+                            {/* Auto-save indicator */}
+                            {savingState !== "idle" && (
+                                <Flex align="center" gap="small">
+                                    {savingState === "saving" && (
+                                        <>
+                                            <LoadingOutlined
+                                                style={{ color: "#1890ff" }}
+                                            />
+                                            <Text
+                                                type="secondary"
+                                                style={{ fontSize: 12 }}
+                                            >
+                                                {isEventCreated
+                                                    ? "Saving..."
+                                                    : "Creating visit..."}
+                                            </Text>
+                                        </>
+                                    )}
+                                    {savingState === "saved" && (
+                                        <>
+                                            <CheckCircleOutlined
+                                                style={{ color: "#52c41a" }}
+                                            />
+                                            <Text
+                                                type="success"
+                                                style={{ fontSize: 12 }}
+                                            >
+                                                Saved
+                                            </Text>
+                                        </>
+                                    )}
+                                    {savingState === "error" && (
+                                        <>
+                                            <ExclamationCircleOutlined
+                                                style={{ color: "#faad14" }}
+                                            />
+                                            <Text
+                                                type="warning"
+                                                style={{ fontSize: 12 }}
+                                            >
+                                                {errorMessage}
+                                            </Text>
+                                        </>
+                                    )}
+                                </Flex>
+                            )}
                         </Flex>
                         <Space size="middle">
                             <Button
@@ -789,7 +1039,7 @@ function TrackedEntity() {
                                     paddingRight: 32,
                                 }}
                             >
-                                Save Visit
+                                Save and complete Visit
                             </Button>
                         </Space>
                     </Flex>
@@ -912,7 +1162,14 @@ function TrackedEntity() {
                         </Card>
                         <Tabs
                             tabPlacement="start"
-                            items={program.programStages.flatMap((stage) => {
+                            items={orderBy(
+                                program.programStages.map((a) => ({
+                                    ...a,
+                                    sortOrder: stages.get(a.id),
+                                })),
+                                "sortOrder",
+                                "asc",
+                            ).flatMap((stage) => {
                                 const currentDataElements = new Map(
                                     stage.programStageDataElements.map(
                                         (psde) => [
@@ -931,6 +1188,10 @@ function TrackedEntity() {
                                         ],
                                     ),
                                 );
+
+                                if (stage.id === "opwSN351xGC") {
+                                    return [];
+                                }
                                 if (
                                     [
                                         "opwSN351xGC",
@@ -1112,6 +1373,9 @@ function TrackedEntity() {
                                                                         onTriggerProgramRules={
                                                                             handleTriggerProgramRules
                                                                         }
+                                                                        onAutoSave={
+                                                                            triggerAutoSave
+                                                                        }
                                                                     />
                                                                 );
                                                             },
@@ -1259,18 +1523,34 @@ function TrackedEntity() {
                                     <Row gutter={[16, 0]}>
                                         {tei.map(({ id }) => {
                                             const current =
-                                                trackedEntityAttributes.get(
-                                                    id,
-                                                )!;
+                                                trackedEntityAttributes.get(id);
+
+                                            if (!current) {
+                                                console.warn(
+                                                    `⚠️ Tracked entity attribute ${id} not found in trackedEntityAttributes map`,
+                                                );
+                                                return null;
+                                            }
+
                                             const optionSet =
                                                 current.optionSet?.id ?? "";
                                             const finalOptions =
                                                 optionSets.get(optionSet);
 
+                                            const attributeConfig =
+                                                allAttributes.get(id);
+
+                                            if (!attributeConfig) {
+                                                console.warn(
+                                                    `⚠️ Attribute config for ${id} not found in allAttributes map`,
+                                                );
+                                                return null;
+                                            }
+
                                             const {
                                                 desktopRenderType,
                                                 mandatory,
-                                            } = allAttributes.get(id)!;
+                                            } = attributeConfig;
 
                                             return (
                                                 <DataElementField

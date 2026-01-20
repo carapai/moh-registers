@@ -33,6 +33,7 @@ export const DataElementField = React.memo<{
     form: FormInstance<any>;
     customLabel?: string;
     onTriggerProgramRules?: () => void;
+    onAutoSave?: (dataElementId: string, value: any) => void;
     desktopRenderType?: RenderType["type"];
 }>(
     ({
@@ -48,6 +49,7 @@ export const DataElementField = React.memo<{
         customLabel,
         desktopRenderType,
         onTriggerProgramRules,
+        onAutoSave,
     }) => {
         if (hidden) return null;
         // Determine if this field should trigger rules on blur or change
@@ -57,7 +59,16 @@ export const DataElementField = React.memo<{
             !isDate(dataElement.valueType);
 
         let element: React.ReactNode = (
-            <Input onBlur={isTextInput ? onTriggerProgramRules : undefined} />
+            <Input
+                onBlur={
+                    isTextInput
+                        ? (e) => {
+                              onTriggerProgramRules?.();
+                              onAutoSave?.(dataElement.id, e.target.value);
+                          }
+                        : undefined
+                }
+            />
         );
         if (dataElement.id === "oTI0DLitzFY") {
             element = (
@@ -91,7 +102,10 @@ export const DataElementField = React.memo<{
                     }}
                     allowClear
                     mode="multiple"
-                    onChange={onTriggerProgramRules}
+                    onChange={(value) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(dataElement.id, value);
+                    }}
                     showSearch={{
                         filterOption: (input, option) =>
                             option
@@ -113,13 +127,36 @@ export const DataElementField = React.memo<{
                 desktopRenderType,
             )
         ) {
+            // Use Form.useWatch to track current value for unselect functionality
+            const currentValue = Form.useWatch(dataElement.id, form);
+
             element = (
                 <Radio.Group
                     vertical={desktopRenderType === "VERTICAL_RADIOBUTTONS"}
-                    onChange={onTriggerProgramRules}
+                    value={currentValue}
+                    onChange={(e) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(dataElement.id, e.target.value);
+                    }}
                 >
                     {finalOptions?.map((o) => (
-                        <Radio key={o.code} value={o.code}>
+                        <Radio
+                            key={o.code}
+                            value={o.code}
+                            onClick={(e) => {
+                                // Allow clicking selected radio to deselect it
+                                if (currentValue === o.code) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    form.setFieldValue(
+                                        dataElement.id,
+                                        undefined,
+                                    );
+                                    onTriggerProgramRules?.();
+                                    onAutoSave?.(dataElement.id, undefined);
+                                }
+                            }}
+                        >
                             {o.name}
                         </Radio>
                     ))}
@@ -135,7 +172,10 @@ export const DataElementField = React.memo<{
                         value: "code",
                     }}
                     allowClear
-                    onChange={onTriggerProgramRules}
+                    onChange={(value) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(dataElement.id, value);
+                    }}
                     showSearch={{
                         filterOption: (input, option) =>
                             option
@@ -151,7 +191,12 @@ export const DataElementField = React.memo<{
             );
         } else if (dataElement.valueType === "BOOLEAN") {
             element = (
-                <Checkbox onChange={onTriggerProgramRules}>
+                <Checkbox
+                    onChange={(e) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(dataElement.id, e.target.checked);
+                    }}
+                >
                     {dataElement.formName ?? dataElement.name}
                 </Checkbox>
             );
@@ -161,6 +206,25 @@ export const DataElementField = React.memo<{
                     form={form}
                     dataElement={dataElement}
                     onTriggerProgramRules={onTriggerProgramRules}
+                    onAutoSave={onAutoSave}
+                />
+            );
+        } else if (dataElement.valueType === "DATETIME") {
+            element = (
+                <DatePicker
+                    style={{
+                        width: "100%",
+                    }}
+                    showTime
+                    onChange={(date) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(
+                            dataElement.id,
+                            date
+                                ? date.format("YYYY-MM-DDTHH:mm:ss")
+                                : undefined,
+                        );
+                    }}
                 />
             );
         } else if (isDate(dataElement.valueType)) {
@@ -169,12 +233,24 @@ export const DataElementField = React.memo<{
                     style={{
                         width: "100%",
                     }}
-                    onChange={onTriggerProgramRules}
+                    onChange={(date) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(
+                            dataElement.id,
+                            date ? date.format("YYYY-MM-DD") : undefined,
+                        );
+                    }}
                 />
             );
         } else if (dataElement.valueType === "LONG_TEXT") {
             element = (
-                <Input.TextArea rows={4} onBlur={onTriggerProgramRules} />
+                <Input.TextArea
+                    rows={4}
+                    onBlur={(e) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(dataElement.id, e.target.value);
+                    }}
+                />
             );
         } else if (
             ["NUMBER", "INTEGER", "INTEGER_POSITIVE"].includes(
@@ -186,7 +262,13 @@ export const DataElementField = React.memo<{
                     style={{
                         width: "100%",
                     }}
-                    onBlur={onTriggerProgramRules}
+                    onBlur={(e) => {
+                        onTriggerProgramRules?.();
+                        onAutoSave?.(
+                            dataElement.id,
+                            e.target.value ? Number(e.target.value) : undefined,
+                        );
+                    }}
                 />
             );
         }
