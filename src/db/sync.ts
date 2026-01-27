@@ -1,5 +1,6 @@
 import { useDataEngine } from "@dhis2/app-runtime";
 import { db, type SyncOperation } from "./index";
+import { createMetadataSync, type MetadataSync } from "./metadata-sync";
 import {
     deleteOldDrafts,
     deleteSyncOperation,
@@ -47,35 +48,278 @@ export class SyncManager {
     private isPulling: boolean = false;
     private syncInterval?: NodeJS.Timeout;
     private cleanupInterval?: NodeJS.Timeout;
+    private metadataCheckInterval?: NodeJS.Timeout;
     private listeners: Set<(state: SyncManagerState) => void> = new Set();
+    private metadataSync: MetadataSync;
 
     constructor(engine: ReturnType<typeof useDataEngine>) {
         this.engine = engine;
+        this.metadataSync = createMetadataSync(engine);
         this.setupOnlineListener();
         this.setupDatabaseHooks();
     }
 
     private setupDatabaseHooks() {
-        // Hook for creating records
-        db.trackedEntities.hook("creating", (primKey, obj, transaction) => {});
-        // Hook for updating records
+        // ============================================================
+        // TRACKED ENTITIES HOOKS
+        // ============================================================
+
+        // Hook for creating tracked entities
+        db.trackedEntities.hook("creating", (primKey, obj, transaction) => {
+            console.log("🎣 Hook: Creating tracked entity", primKey);
+
+            // Initialize sync metadata if not present
+            const entity = obj as any;
+            if (!entity.syncStatus) {
+                entity.syncStatus = "pending";
+                entity.version = 1;
+                entity.lastModified = new Date().toISOString();
+            }
+
+            // Queue sync operation asynchronously ONLY if not draft
+            // Draft entities should NOT be queued until explicitly marked as pending
+            transaction.on("complete", () => {
+                // Get the created entity to check its final status
+                db.trackedEntities.get(primKey).then((created) => {
+                    if (created && created.syncStatus === "pending") {
+                        this.queueCreateTrackedEntity(created, 8).catch(
+                            (error) => {
+                                console.error(
+                                    "❌ Failed to queue tracked entity sync:",
+                                    error,
+                                );
+                            },
+                        );
+                    } else if (created && created.syncStatus === "draft") {
+                        console.log(
+                            "⏸️  Tracked entity is draft, skipping sync queue:",
+                            primKey,
+                        );
+                    }
+                });
+            });
+        });
+
+        // Hook for updating tracked entities
         db.trackedEntities.hook(
             "updating",
-            (modifications, primKey, obj, transaction) => {},
+            (modifications, primKey, obj, transaction) => {
+                console.log("🎣 Hook: Updating tracked entity", primKey);
+                const entity = obj as any;
+                const mods = modifications as any;
+                if (!("syncStatus" in mods)) {
+                    if (
+                        entity.syncStatus !== "draft" &&
+                        entity.syncStatus !== "synced"
+                    ) {
+                        mods.syncStatus = "pending";
+                    }
+                }
+
+                if (!("version" in mods) && !("lastSynced" in mods)) {
+                    mods.version = (entity.version || 0) + 1;
+                    mods.lastModified = new Date().toISOString();
+                }
+
+                transaction.on("complete", () => {
+                    db.trackedEntities.get(primKey).then((updated) => {
+                        if (updated && updated.syncStatus === "pending") {
+                            this.queueCreateTrackedEntity(updated, 8).catch(
+                                (error) => {
+                                    console.error(
+                                        "❌ Failed to queue tracked entity update:",
+                                        error,
+                                    );
+                                },
+                            );
+                        } else if (updated && updated.syncStatus === "draft") {
+                            console.log(
+                                "⏸️  Tracked entity is draft, skipping sync queue:",
+                                primKey,
+                            );
+                        }
+                    });
+                });
+            },
         );
-        // Hook for deleting records
+
+        // Hook for deleting tracked entities
         db.trackedEntities.hook("deleting", (primKey, obj, transaction) => {});
 
-        // Hook for creating records
-        db.events.hook("creating", (primKey, obj, transaction) => {});
+        // ============================================================
+        // EVENTS HOOKS
+        // ============================================================
 
-        // Hook for updating records
+        // Hook for creating events
+        db.events.hook("creating", (primKey, obj, transaction) => {
+            const event = obj as any;
+            if (!event.syncStatus) {
+                event.syncStatus = "pending";
+                event.version = 1;
+                event.lastModified = new Date().toISOString();
+            }
+
+            // Queue sync operation asynchronously ONLY if not draft
+            // transaction.on("complete", () => {
+            //     db.events.get(primKey).then((created) => {
+            // 			console.log("🎣 Hook: Creating event", created);
+            //         // if (created && created.syncStatus === "pending") {
+            //         //     this.queueCreateEvent(created, 7).catch((error) => {
+            //         //         console.error(
+            //         //             "❌ Failed to queue event sync:",
+            //         //             error,
+            //         //         );
+            //         //     });
+            //         // } else if (created && created.syncStatus === "draft") {
+            //         //     console.log(
+            //         //         "⏸️  Event is draft, skipping sync queue:",
+            //         //         primKey,
+            //         //     );
+            //         // }
+            //     });
+            // });
+        });
+
+        // Hook for updating events
         db.events.hook(
             "updating",
-            (modifications, primKey, obj, transaction) => {},
+            (modifications, primKey, obj, transaction) => {
+                // Update sync metadata
+                const event = obj as any;
+                const mods = modifications as any;
+
+                // Don't override if syncStatus is explicitly being set (e.g., to "synced")
+                // Only auto-set to pending for user data changes
+                if (!("syncStatus" in mods)) {
+                    // Only set to pending if not draft and not already synced
+                    if (
+                        event.syncStatus !== "draft" &&
+                        event.syncStatus !== "synced"
+                    ) {
+                        mods.syncStatus = "pending";
+                    }
+                }
+
+                // Don't increment version if only sync status/metadata is changing
+                // Only increment for actual data changes
+                if (!("version" in mods) && !("lastSynced" in mods)) {
+                    mods.version = (event.version || 0) + 1;
+                    mods.lastModified = new Date().toISOString();
+                }
+
+                // Queue sync operation after transaction completes
+                // But ONLY if the final status is "pending", not "draft" or "synced"
+                transaction.on("complete", () => {
+                    db.events.get(primKey).then((updated) => {
+                        if (updated && updated.syncStatus === "pending") {
+                            this.queueCreateEvent(updated, 7).catch((error) => {
+                                console.error(
+                                    "❌ Failed to queue event update:",
+                                    error,
+                                );
+                            });
+                        }
+                    });
+                });
+            },
         );
-        // Hook for deleting records
-        db.events.hook("deleting", (primKey, obj, transaction) => {});
+
+        // Hook for deleting events
+        db.events.hook("deleting", (primKey, obj, transaction) => {
+            console.log("🎣 Hook: Deleting event", primKey);
+            // Note: DHIS2 doesn't support delete via tracker endpoint
+        });
+
+        // ============================================================
+        // RELATIONSHIPS HOOKS
+        // ============================================================
+
+        // Hook for creating relationships
+        db.relationships.hook("creating", (primKey, obj, transaction) => {
+            console.log("🎣 Hook: Creating relationship", primKey);
+
+            // Initialize sync metadata if not present
+            const relationship = obj as any;
+            if (!relationship.syncStatus) {
+                relationship.syncStatus = "pending";
+                relationship.version = 1;
+                relationship.lastModified = new Date().toISOString();
+            }
+
+            // Queue sync operation asynchronously ONLY if not draft
+            transaction.on("complete", () => {
+                db.relationships.get(primKey).then((created) => {
+                    if (created && created.syncStatus === "pending") {
+                        this.queueCreateRelationship(created, 6).catch(
+                            (error) => {
+                                console.error(
+                                    "❌ Failed to queue relationship sync:",
+                                    error,
+                                );
+                            },
+                        );
+                    } else if (created && created.syncStatus === "draft") {
+                        console.log(
+                            "⏸️  Relationship is draft, skipping sync queue:",
+                            primKey,
+                        );
+                    }
+                });
+            });
+        });
+
+        // Hook for updating relationships
+        db.relationships.hook(
+            "updating",
+            (modifications, primKey, obj, transaction) => {
+                console.log("🎣 Hook: Updating relationship", primKey);
+
+                // Update sync metadata
+                const relationship = obj as any;
+                const mods = modifications as any;
+
+                // Don't override if syncStatus is explicitly being set (e.g., to "synced")
+                if (!("syncStatus" in mods)) {
+                    // Only set to pending if not draft and not already synced
+                    if (
+                        relationship.syncStatus !== "draft" &&
+                        relationship.syncStatus !== "synced"
+                    ) {
+                        mods.syncStatus = "pending";
+                    }
+                }
+
+                // Don't increment version if only sync status/metadata is changing
+                if (!("version" in mods) && !("lastSynced" in mods)) {
+                    mods.version = (relationship.version || 0) + 1;
+                    mods.lastModified = new Date().toISOString();
+                }
+
+                // Queue sync operation after transaction completes
+                // But ONLY if the final status is "pending", not "draft" or "synced"
+                transaction.on("complete", () => {
+                    db.relationships.get(primKey).then((updated) => {
+                        if (updated && updated.syncStatus === "pending") {
+                            this.queueCreateRelationship(updated, 6).catch(
+                                (error) => {
+                                    console.error(
+                                        "❌ Failed to queue relationship update:",
+                                        error,
+                                    );
+                                },
+                            );
+                        } else if (updated && updated.syncStatus === "draft") {
+                            console.log(
+                                "⏸️  Relationship is draft, skipping sync queue:",
+                                primKey,
+                            );
+                        }
+                    });
+                });
+            },
+        );
+
+        console.log("✅ Database hooks setup complete");
     }
 
     /**
@@ -132,6 +376,7 @@ export class SyncManager {
      * ✅ OPTIMIZED: Default interval increased to 5 minutes (was 30 seconds)
      * Syncs every 5 minutes when online to reduce unnecessary sync checks
      * ✅ OPTIMIZED: Auto-cleanup of old drafts runs daily
+     * ✅ NEW: Metadata staleness checks every 30 minutes
      */
     public startAutoSync(intervalMs: number = 300000): void {
         if (this.syncInterval) {
@@ -158,6 +403,9 @@ export class SyncManager {
 
         // ✅ OPTIMIZED: Run draft cleanup daily (24 hours)
         this.scheduleDraftCleanup();
+
+        // ✅ NEW: Start metadata freshness checks every 30 minutes
+        this.startMetadataChecks();
     }
 
     /**
@@ -173,6 +421,11 @@ export class SyncManager {
             clearInterval(this.cleanupInterval);
             this.cleanupInterval = undefined;
             console.log("🛑 Draft cleanup stopped");
+        }
+        if (this.metadataCheckInterval) {
+            clearInterval(this.metadataCheckInterval);
+            this.metadataCheckInterval = undefined;
+            console.log("🛑 Metadata checks stopped");
         }
     }
 
@@ -197,6 +450,61 @@ export class SyncManager {
         ); // 24 hours
 
         console.log("🗑️  Scheduled daily draft cleanup (30+ days old)");
+    }
+
+    /**
+     * Start metadata staleness checks (runs every 30 minutes)
+     * ✅ NEW: Checks if metadata is stale and logs notification
+     * Users can manually sync via the UI button if needed
+     */
+    private startMetadataChecks(): void {
+        // Check immediately on start
+        this.checkMetadataFreshness().catch((error) => {
+            console.error("❌ Metadata check error:", error);
+        });
+
+        // Schedule checks every 30 minutes
+        this.metadataCheckInterval = setInterval(
+            () => {
+                this.checkMetadataFreshness().catch((error) => {
+                    console.error("❌ Metadata check error:", error);
+                });
+            },
+            30 * 60 * 1000,
+        ); // 30 minutes
+
+        console.log(
+            "📋 Scheduled metadata freshness checks (every 30 minutes)",
+        );
+    }
+
+    /**
+     * Check if metadata is stale and notify user
+     * Does not automatically sync - user must trigger manual sync via UI
+     */
+    private async checkMetadataFreshness(): Promise<void> {
+        try {
+            const isStale = await this.metadataSync.isMetadataStale();
+            if (isStale) {
+                console.log(
+                    "📋 Metadata is stale (>1 hour old). User can sync via UI button.",
+                );
+                // Optional: Could emit an event or notification here
+                // For now, just log - user has manual sync button in UI
+            } else {
+                console.log("📋 Metadata is fresh");
+            }
+        } catch (error) {
+            console.error("❌ Failed to check metadata freshness:", error);
+        }
+    }
+
+    /**
+     * Get the metadata sync manager instance
+     * Allows components to access metadata sync functionality
+     */
+    public getMetadataSync(): MetadataSync {
+        return this.metadataSync;
     }
 
     /**
@@ -245,6 +553,11 @@ export class SyncManager {
                     if (eventOps.length > 0) {
                         await this.processBatchedEvents(eventOps);
                         for (const op of eventOps) {
+                            // Update event syncStatus to "synced"
+                            await db.events.update(op.entityId, {
+                                syncStatus: "synced",
+                                lastSynced: new Date().toISOString(),
+                            });
                             await deleteSyncOperation(op.id);
                             syncedCount++;
                         }
@@ -253,6 +566,11 @@ export class SyncManager {
                     if (relationshipOps.length > 0) {
                         await this.processBatchedRelationships(relationshipOps);
                         for (const op of relationshipOps) {
+                            // Update relationship syncStatus to "synced"
+                            await db.relationships.update(op.entityId, {
+                                syncStatus: "synced",
+                                lastSynced: new Date().toISOString(),
+                            });
                             await deleteSyncOperation(op.id);
                             syncedCount++;
                         }
@@ -261,6 +579,11 @@ export class SyncManager {
                     for (const op of entityOps) {
                         try {
                             await this.processSyncOperation(op);
+                            // Update tracked entity syncStatus to "synced"
+                            await db.trackedEntities.update(op.entityId, {
+                                syncStatus: "synced",
+                                lastSynced: new Date().toISOString(),
+                            });
                             await deleteSyncOperation(op.id);
                             syncedCount++;
                         } catch (error: any) {
@@ -372,7 +695,7 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: { events: allEvents },
-            params: { async: false },
+            params: { async: false, importStrategy: "CREATE_AND_UPDATE" },
         });
 
         console.log(
@@ -388,7 +711,7 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: { relationships },
-            params: { async: false },
+            params: { async: false, importStrategy: "CREATE_AND_UPDATE" },
         });
 
         console.log(
@@ -485,7 +808,7 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: payload,
-            params: { async: false },
+            params: { async: false, importStrategy: "CREATE_AND_UPDATE" },
         });
     }
     private async syncCreateRelationship(relationships: any): Promise<void> {
@@ -493,7 +816,7 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: { relationships },
-            params: { async: false },
+            params: { async: false, importStrategy: "CREATE_AND_UPDATE" },
         });
     }
 
@@ -530,7 +853,7 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: { trackedEntities, enrollments },
-            params: { async: false },
+            params: { async: false, importStrategy: "CREATE_AND_UPDATE" },
         });
     }
 
@@ -540,26 +863,32 @@ export class SyncManager {
     private async syncCreateEvent(data: any): Promise<void> {
         const { dataValues, relationships, ...event } = data;
 
-        const allEvents = [{
-            ...event,
-            dataValues: Object.entries(dataValues || {}).flatMap(
-                ([dataElement, value]: [string, any]) => {
-                    if (value !== undefined && value !== null && value !== "") {
-                        if (Array.isArray(value)) {
+        const allEvents = [
+            {
+                ...event,
+                dataValues: Object.entries(dataValues || {}).flatMap(
+                    ([dataElement, value]: [string, any]) => {
+                        if (
+                            value !== undefined &&
+                            value !== null &&
+                            value !== ""
+                        ) {
+                            if (Array.isArray(value)) {
+                                return {
+                                    dataElement,
+                                    value: value.join(","),
+                                };
+                            }
                             return {
                                 dataElement,
-                                value: value.join(","),
+                                value,
                             };
                         }
-                        return {
-                            dataElement,
-                            value,
-                        };
-                    }
-                    return [];
-                },
-            ),
-        }];
+                        return [];
+                    },
+                ),
+            },
+        ];
 
         // Build the payload with relationships if they exist
         const payload: any = { events: allEvents };
@@ -573,7 +902,7 @@ export class SyncManager {
             resource: "tracker",
             type: "create",
             data: payload,
-            params: { async: false },
+            params: { async: false, importStrategy: "CREATE_AND_UPDATE" },
         });
     }
 
@@ -581,7 +910,7 @@ export class SyncManager {
      * Sync update event to DHIS2 API
      */
     private async syncUpdateEvent(data: any): Promise<void> {
-        // Same as create for now, DHIS2 tracker endpoint handles both
+        // Same as create for now, DHIS2 tracker endpoint handles both with CREATE_AND_UPDATE
         await this.syncCreateEvent(data);
     }
 

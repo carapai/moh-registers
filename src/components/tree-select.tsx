@@ -12,7 +12,6 @@ const OrgUnitTreeSelect: React.FC<{
     value: string | undefined;
 }> = ({ onChange, value }) => {
     const { queryClient, engine } = RootRoute.useRouteContext();
-    const { id: user } = RootRoute.useLoaderData();
     const treeData = useLiveQuery(async () => {
         return await db.organisationUnits.orderBy("title").toArray();
     }, []);
@@ -39,7 +38,7 @@ const OrgUnitTreeSelect: React.FC<{
                 value: ou.id,
                 title: ou.name,
                 isLeaf: ou.leaf,
-                user,
+                user: "",
             }));
             db.organisationUnits.bulkPut(newTreeNodes);
         }

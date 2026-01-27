@@ -1,4 +1,9 @@
-import { PlusOutlined, UserAddOutlined } from "@ant-design/icons";
+import {
+    CheckCircleOutlined,
+    ExclamationCircleOutlined,
+    PlusOutlined,
+    UserAddOutlined,
+} from "@ant-design/icons";
 import {
     Button,
     Card,
@@ -9,24 +14,24 @@ import {
     Row,
     Typography,
 } from "antd";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
+import { db } from "../db";
+import { useDexieTrackedEntityForm } from "../hooks/useDexieTrackedEntityForm";
+import { useEntitySyncStatus } from "../hooks/useEntitySyncStatus";
+import { useProgramRulesWithDexie } from "../hooks/useProgramRules";
 import { TrackerContext } from "../machines/tracker";
-import { DataElementField } from "./data-element-field";
 import { RootRoute } from "../routes/__root";
-import { flattenTrackedEntity } from "../utils/utils";
-import { getTrackedEntityDraft } from "../db/operations";
-import { useAutoSave } from "../hooks/useAutoSave";
 import { RenderType } from "../schemas";
+import { DataElementField } from "./data-element-field";
+import { calculateColSpan, spans } from "../utils/utils";
 
 const { Text } = Typography;
-
-const spans = new Map<string, number>([
-    ["XjgpfkoxffK", 4],
-    ["rN2iZ0q1NWV", 4],
-    ["W87HAtUHJjB", 4],
-    ["PKuyTiVCR89", 4],
-    ["oTI0DLitzFY", 8],
-]);
 
 export const TrackerRegistration: React.FC = () => {
     const {
@@ -57,138 +62,112 @@ export const TrackerRegistration: React.FC = () => {
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState(0);
     const [form] = Form.useForm();
-    const trackedEntity = TrackerContext.useSelector(
+    const trackedEntityFromState = TrackerContext.useSelector(
         (state) => state.context.trackedEntity,
-    );
-    const ruleResult = TrackerContext.useSelector(
-        (state) => state.context.registrationRuleResults,
     );
 
     const trackerActor = TrackerContext.useActorRef();
-    const machineState = TrackerContext.useSelector((state) => state.value);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const orgUnit = TrackerContext.useSelector(
         (state) => state.context.orgUnit.id,
     );
-
-    // Auto-save registration drafts
-    const { clearDraft } = useAutoSave({
-        form: form,
-        draftId: trackedEntity.trackedEntity || "temp-registration",
-        type: "trackedEntity",
-        interval: 30000, // 30 seconds
-        enabled: isVisitModalOpen,
-        metadata: {
-            orgUnit: trackedEntity.orgUnit || "",
-            program: program.id,
-            enrollment: trackedEntity.enrollment?.enrollment || "",
-            isNew:
-                !trackedEntity.trackedEntity ||
-                trackedEntity.trackedEntity.startsWith("temp"),
-        },
-        onSave: () => console.log("💾 Registration draft auto-saved"),
+    const { trackedEntity, updateAttribute, updateAttributes } =
+        useDexieTrackedEntityForm({
+            trackedEntityId: trackedEntityFromState.trackedEntity || "",
+        });
+    const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
+        form,
+        programRules,
+        programRuleVariables,
+        trackedEntityAttributes:
+            trackedEntity?.attributes || trackedEntityFromState.attributes,
+        enrollment:
+            trackedEntity?.enrollment || trackedEntityFromState.enrollment,
+        onAssignments: updateAttributes,
+        applyAssignmentsToForm: true,
+        persistAssignments: false,
+        clearHiddenFields: true,
+        program: program.id,
+        isRegistration: true,
+        debounceMs: 300,
     });
 
+		const { syncStatus, syncError } = useEntitySyncStatus(
+        trackedEntity?.trackedEntity || null,
+    );
+
     const fields = useMemo(() => {
-        return Object.entries(trackedEntity.attributes || {}).map(
+        return Object.entries(trackedEntity?.attributes || {}).map(
             ([name, value]) => ({
                 name,
                 value,
             }),
         );
-    }, []);
+    }, [trackedEntity?.attributes]);
 
     const handleTriggerProgramRules = useCallback(() => {
-        const allValues = form.getFieldsValue();
-        trackerActor.send({
-            type: "EXECUTE_PROGRAM_RULES",
-            attributeValues: allValues,
-            programRules: programRules,
-            programRuleVariables: programRuleVariables,
-            ruleResultKey: "registrationRuleResults",
-            ruleResultUpdateKey: "trackedEntity",
-            updateKey: "attributes",
-        });
-    }, [form, trackerActor, programRules, programRuleVariables]);
+        executeAndApplyRules();
+    }, [executeAndApplyRules]);
+
+    const initializedRef = useRef<string | null>(null);
 
     useEffect(() => {
-        const loadDraftIfExists = async () => {
-            if (isVisitModalOpen && trackedEntity.trackedEntity) {
-                // Check if a draft exists for this tracked entity
-                const draft = await getTrackedEntityDraft(
-                    trackedEntity.trackedEntity,
-                );
+        const initializeEntity = async () => {
+            if (!isVisitModalOpen) {
+                initializedRef.current = null;
+                return;
+            }
 
-                if (
-                    draft &&
-                    draft.attributes &&
-                    Object.keys(draft.attributes).length > 0
-                ) {
-                    // Ask user if they want to restore the draft
-                    Modal.confirm({
-                        title: "Draft Found",
-                        content: `A saved registration draft was found (last saved: ${new Date(draft.updatedAt).toLocaleString()}). Would you like to restore it?`,
-                        okText: "Restore Draft",
-                        cancelText: "Start Fresh",
-                        onOk: () => {
-                            // Load draft data into form
-                            form.setFieldsValue(draft.attributes);
-                            message.success("Draft restored successfully");
-                        },
-                        onCancel: () => {
-                            // User chose to start fresh, do nothing
-                            message.info("Starting with a fresh form");
-                        },
-                    });
+            if (!trackedEntityFromState?.trackedEntity) return;
+            if (
+                initializedRef.current === trackedEntityFromState.trackedEntity
+            ) {
+                return;
+            }
+
+            initializedRef.current = trackedEntityFromState.trackedEntity;
+            try {
+                await db.trackedEntities.put({
+                    ...trackedEntityFromState,
+                    syncStatus: "draft",
+                    version: 1,
+                    lastModified: new Date().toISOString(),
+                } as any);
+                console.log(
+                    "✅ Patient entity initialized as draft in Dexie:",
+                    trackedEntityFromState.trackedEntity,
+                );
+                if (trackedEntityFromState.attributes) {
+                    form.setFieldsValue(trackedEntityFromState.attributes);
+                    console.log(
+                        "📝 Form initialized with tracked entity attributes",
+                    );
                 }
 
-                // Execute program rules regardless of draft
-                trackerActor.send({
-                    type: "EXECUTE_PROGRAM_RULES",
-                    attributeValues: trackedEntity.attributes,
-                    programRules: programRules,
-                    programRuleVariables: programRuleVariables,
-                    ruleResultKey: "registrationRuleResults",
-                    ruleResultUpdateKey: "trackedEntity",
-                    updateKey: "attributes",
-                });
+                if (
+                    trackedEntityFromState.attributes &&
+                    Object.keys(trackedEntityFromState.attributes).length > 0
+                ) {
+                    executeAndApplyRules(trackedEntityFromState.attributes);
+                } else {
+                    console.log(
+                        "✨ Creating new patient registration with empty form",
+                    );
+                }
+            } catch (error) {
+                console.error("❌ Failed to initialize patient entity:", error);
             }
         };
 
-        loadDraftIfExists();
-    }, [isVisitModalOpen, trackedEntity.trackedEntity]);
+        initializeEntity();
+    }, [
+        isVisitModalOpen,
+        trackedEntityFromState.trackedEntity,
+        executeAndApplyRules,
+        form,
+    ]);
 
-    // Apply assignments when rule results change
-    useEffect(() => {
-        if (
-            isVisitModalOpen &&
-            Object.keys(ruleResult.assignments).length > 0
-        ) {
-            form.setFieldsValue(ruleResult.assignments);
-        }
-    }, [ruleResult.assignments, isVisitModalOpen, form]);
-
-    // Listen for state machine transitions and show appropriate messages
-    // Only show success message if we were actually submitting
-    useEffect(() => {
-        if (machineState === "entitySuccess" && isSubmitting) {
-            message.success({
-                content: "Patient registered successfully!",
-                duration: 3,
-            });
-            // Clear draft after successful save
-            clearDraft();
-            setIsSubmitting(false);
-        } else if (machineState === "failure" && isSubmitting) {
-            message.error({
-                content: "Failed to save patient. Please try again.",
-                duration: 5,
-            });
-            setIsSubmitting(false);
-        }
-    }, [machineState, isSubmitting, clearDraft]);
-
-    const onStageSubmit = (values: any) => {
+    const onStageSubmit = async (values: any) => {
         if (ruleResult.errors.length > 0) {
             console.error(
                 "Form has validation errors from program rules:",
@@ -201,21 +180,57 @@ export const TrackerRegistration: React.FC = () => {
             return;
         }
         try {
-            const current: ReturnType<typeof flattenTrackedEntity> = {
-                ...trackedEntity,
-                attributes: { ...trackedEntity.attributes, ...values },
-            };
             setIsSubmitting(true);
+
+            const finalValues = {
+                ...values,
+                ...ruleResult.assignments,
+            };
+
+            await updateAttributes(finalValues);
+
+            if (!trackedEntity?.trackedEntity) {
+                throw new Error("Failed to save patient to local database");
+            }
+            await db.trackedEntities.update(trackedEntity.trackedEntity, {
+                syncStatus: "pending",
+                lastModified: new Date().toISOString(),
+            } as any);
+
+            const saved = await db.trackedEntities.get(
+                trackedEntity.trackedEntity,
+            );
+            if (!saved) {
+                throw new Error("Failed to verify patient save");
+            }
+
+            console.log(
+                "✅ Patient entity marked for sync:",
+                trackedEntity.trackedEntity,
+            );
+
             trackerActor.send({
-                type: "CREATE_TRACKED_ENTITY",
-                trackedEntity: current,
+                type: "SET_TRACKED_ENTITY",
+                trackedEntity: saved,
             });
-            // Success message will be shown after state machine confirms save
+
+            message.success({
+                content: "Patient registered successfully!",
+                duration: 3,
+            });
+
             setIsVisitModalOpen(false);
+            setIsSubmitting(false);
+
+            console.log("✅ Patient entity saved to Dexie with automatic sync");
         } catch (error) {
             console.error("Error creating patient:", error);
+            const errorMessage =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to register patient. Please try again.";
             message.error({
-                content: "Failed to register patient. Please try again.",
+                content: errorMessage,
                 duration: 5,
             });
             setIsSubmitting(false);
@@ -293,34 +308,98 @@ export const TrackerRegistration: React.FC = () => {
                 width="85vw"
                 footer={
                     <Flex
-                        justify="end"
-                        gap="middle"
+                        justify="space-between"
+                        align="center"
                         style={{ padding: "8px 0" }}
                     >
-                        <Button
-                            onClick={() => {
-                                form.resetFields();
-                                setIsVisitModalOpen(false);
-                            }}
-                            style={{ borderRadius: 8 }}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            type="primary"
-                            onClick={handleSubmit}
-                            style={{
-                                background:
-                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
-                                borderColor: "#7c3aed",
-                                borderRadius: 8,
-                                fontWeight: 500,
-                                paddingLeft: 32,
-                                paddingRight: 32,
-                            }}
-                        >
-                            Register Patient
-                        </Button>
+                        {syncStatus && syncStatus !== "draft" && (
+                            <Flex align="center" gap="small">
+                                {syncStatus === "synced" && (
+                                    <>
+                                        <CheckCircleOutlined
+                                            style={{ color: "#52c41a" }}
+                                        />
+                                        <Text
+                                            type="success"
+                                            style={{ fontSize: 12 }}
+                                        >
+                                            Synced
+                                        </Text>
+                                    </>
+                                )}
+                                {syncStatus === "pending" && (
+                                    <>
+                                        <CheckCircleOutlined
+                                            style={{ color: "#1890ff" }}
+                                        />
+                                        <Text
+                                            style={{
+                                                fontSize: 12,
+                                                color: "#1890ff",
+                                            }}
+                                        >
+                                            Saved (pending sync)
+                                        </Text>
+                                    </>
+                                )}
+                                {syncStatus === "syncing" && (
+                                    <>
+                                        <CheckCircleOutlined
+                                            style={{ color: "#1890ff" }}
+                                        />
+                                        <Text
+                                            style={{
+                                                fontSize: 12,
+                                                color: "#1890ff",
+                                            }}
+                                        >
+                                            Syncing...
+                                        </Text>
+                                    </>
+                                )}
+                                {syncStatus === "failed" && (
+                                    <>
+                                        <ExclamationCircleOutlined
+                                            style={{ color: "#faad14" }}
+                                        />
+                                        <Text
+                                            type="warning"
+                                            style={{ fontSize: 12 }}
+                                        >
+                                            {syncError || "Sync failed"}
+                                        </Text>
+                                    </>
+                                )}
+                            </Flex>
+                        )}
+                        {(!syncStatus || syncStatus === "draft") && <div />}
+                        <Flex gap="middle">
+                            <Button
+                                onClick={() => {
+                                    form.resetFields();
+                                    setIsVisitModalOpen(false);
+                                }}
+                                style={{ borderRadius: 8 }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={handleSubmit}
+                                loading={isSubmitting}
+                                style={{
+                                    background:
+                                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 8,
+                                    fontWeight: 500,
+                                    paddingLeft: 32,
+                                    paddingRight: 32,
+                                }}
+                            >
+                                Register Patient
+                            </Button>
+                        </Flex>
                     </Flex>
                 }
                 styles={{
@@ -340,88 +419,124 @@ export const TrackerRegistration: React.FC = () => {
                     fields={fields}
                     onFinish={onStageSubmit}
                     style={{ margin: 0, padding: 0 }}
-                    initialValues={trackedEntity.attributes}
+                    initialValues={trackedEntity?.attributes}
                 >
                     <Flex vertical gap={10}>
                         {program.programSections.map(
-                            ({ name, trackedEntityAttributes: tei, id }) => (
-                                <Card
-                                    title={name}
-                                    key={id}
-                                    style={{ borderRadius: 0 }}
-                                    size="small"
-                                >
-                                    <Row gutter={[16, 0]}>
-                                        {tei.map(({ id }) => {
-                                            const current =
-                                                trackedEntityAttributes.get(
-                                                    id,
-                                                )!;
-                                            if (
-                                                ruleResult.hiddenSections.has(
-                                                    id,
+                            ({ name, trackedEntityAttributes: tei, id }) => {
+                                const allAreHidden = tei.every(({ id }) =>
+                                    ruleResult.hiddenFields.has(id),
+                                );
+                                if (allAreHidden) {
+                                    return null;
+                                }
+                                return (
+                                    <Card
+                                        title={name}
+                                        key={id}
+                                        style={{
+                                            borderRadius: 0,
+                                        }}
+                                        size="small"
+                                    >
+                                        <Row gutter={[16, 0]}>
+                                            {tei.map(({ id }) => {
+                                                if (
+                                                    ruleResult.hiddenFields.has(
+                                                        id,
+                                                    ) &&
+                                                    ruleResult
+                                                        .shownOptionGroups[
+                                                        id
+                                                    ] === undefined
+                                                ) {
+                                                    return [];
+                                                }
+                                                const current =
+                                                    trackedEntityAttributes.get(
+                                                        id,
+                                                    )!;
+                                                if (
+                                                    ruleResult.hiddenSections.has(
+                                                        id,
+                                                    )
                                                 )
-                                            )
-                                                return [];
+                                                    return [];
 
-                                            const optionSet =
-                                                current.optionSet?.id ?? "";
+                                                const optionSet =
+                                                    current.optionSet?.id ?? "";
 
-                                            const finalOptions = optionSets
-                                                .get(optionSet)
-                                                ?.flatMap((o) => {
-                                                    if (
-                                                        ruleResult.hiddenOptions[
-                                                            o.id
-                                                        ]?.has(o.id)
-                                                    ) {
-                                                        return [];
-                                                    }
-                                                    return o;
-                                                });
+                                                const finalOptions = optionSets
+                                                    .get(optionSet)
+                                                    ?.flatMap((o) => {
+                                                        if (
+                                                            ruleResult.hiddenOptions[
+                                                                o.id
+                                                            ]?.has(o.id)
+                                                        ) {
+                                                            return [];
+                                                        }
+                                                        return o;
+                                                    });
 
-                                            const errors =
-                                                ruleResult.errors.filter(
-                                                    (msg) => msg.key === id,
+                                                const errors =
+                                                    ruleResult.errors.filter(
+                                                        (msg) => msg.key === id,
+                                                    );
+                                                const messages =
+                                                    ruleResult.messages.filter(
+                                                        (msg) => msg.key === id,
+                                                    );
+                                                const warnings =
+                                                    ruleResult.warnings.filter(
+                                                        (msg) => msg.key === id,
+                                                    );
+
+                                                const {
+                                                    desktopRenderType,
+                                                    mandatory,
+                                                } = allAttributes.get(id)!;
+
+                                                return (
+                                                    <DataElementField
+                                                        key={id}
+                                                        dataElement={current}
+                                                        hidden={false}
+                                                        finalOptions={
+                                                            finalOptions
+                                                        }
+                                                        messages={messages}
+                                                        warnings={warnings}
+                                                        errors={errors}
+                                                        required={mandatory}
+                                                        disabled={
+                                                            id in
+                                                            ruleResult.assignments
+                                                        }
+                                                        span={
+                                                            spans.get(id) ||
+                                                            calculateColSpan(
+                                                                tei.length,
+                                                                6,
+                                                            )
+                                                        }
+                                                        form={form}
+                                                        desktopRenderType={
+                                                            desktopRenderType?.type
+                                                        }
+                                                        onTriggerProgramRules={
+                                                            handleTriggerProgramRules
+                                                        }
+                                                        onAutoSave={
+                                                            updateAttribute
+                                                        }
+                                                    />
                                                 );
-                                            const messages =
-                                                ruleResult.messages.filter(
-                                                    (msg) => msg.key === id,
-                                                );
-                                            const warnings =
-                                                ruleResult.warnings.filter(
-                                                    (msg) => msg.key === id,
-                                                );
-
-                                            const {
-                                                desktopRenderType,
-                                                mandatory,
-                                            } = allAttributes.get(id)!;
-
-                                            return (
-                                                <DataElementField
-                                                    key={id}
-                                                    dataElement={current}
-                                                    hidden={false}
-                                                    finalOptions={finalOptions}
-                                                    messages={messages}
-                                                    warnings={warnings}
-                                                    errors={errors}
-                                                    required={mandatory}
-                                                    span={spans.get(id) || 6}
-                                                    form={form}
-                                                    desktopRenderType={
-                                                        desktopRenderType?.type
-                                                    }
-                                                    onTriggerProgramRules={
-                                                        handleTriggerProgramRules
-                                                    }
-                                                />
-                                            );
-                                        })}
-                                    </Row>
-                                </Card>
-                            ),
+                                            })}
+                                        </Row>
+                                    </Card>
+                                );
+                            },
                         )}
                     </Flex>
                 </Form>

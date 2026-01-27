@@ -20,6 +20,7 @@ import {
     Descriptions,
     Flex,
     Form,
+    message,
     Modal,
     Row,
     Select,
@@ -29,31 +30,36 @@ import {
     Tabs,
     Tag,
     Typography,
-    message,
 } from "antd";
 import dayjs from "dayjs";
+import { useLiveQuery } from "dexie-react-hooks";
 import { orderBy } from "lodash";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DataElementField } from "../components/data-element-field";
 import { ProgramStageCapture } from "../components/program-stage-capture";
-import RelationshipEvent from "../components/relationship-event";
-import { FlattenedEvent } from "../db";
+import SectionCapture from "../components/section-capture";
+import { db, FlattenedEvent } from "../db";
 import {
-    getEventDraft,
     populateRelationshipsForEntity,
+    saveTrackedEntity,
 } from "../db/operations";
-import { useAutoSave } from "../hooks/useAutoSave";
-import { useEventAutoSave } from "../hooks/useEventAutoSave";
-import { useTrackerState } from "../hooks/useTrackerState";
+import { useDexieEventForm } from "../hooks/useDexieEventForm";
+import {
+    useEntitySyncStatus,
+    useEventSyncStatus,
+} from "../hooks/useEntitySyncStatus";
+import { useProgramRulesWithDexie } from "../hooks/useProgramRules";
 import { TrackerContext } from "../machines/tracker";
 import { RenderType } from "../schemas";
 import { generateUid } from "../utils/id";
 import {
+    calculateColSpan,
     createEmptyEvent,
     createEmptyTrackedEntity,
     createGetValueProps,
     createNormalize,
     flattenTrackedEntity,
+    spans,
 } from "../utils/utils";
 import { RootRoute } from "./__root";
 export const TrackedEntityRoute = createRoute({
@@ -78,8 +84,6 @@ const stages: Map<string, number> = new Map([
 function TrackedEntity() {
     const {
         program,
-        dataElements,
-        optionGroups,
         trackedEntityAttributes,
         optionSets,
         programRules,
@@ -94,8 +98,15 @@ function TrackedEntity() {
         Array<{ id: string; name: string; code: string; optionSet: string }>
     >(optionSets.get("QwsvSPpnRul") ?? []);
 
-    const { enrollment, events, mainEvent, ruleResult } =
-        useTrackerState("K2nxbE9ubSs");
+    const trackedEntity = TrackerContext.useSelector(
+        (state) => state.context.trackedEntity,
+    );
+
+    const mainEvent = TrackerContext.useSelector(
+        (state) => state.context.mainEvent,
+    );
+
+    const enrollment = trackedEntity.enrollment;
 
     const attributes = Array.from(trackedEntityAttributes.values());
 
@@ -106,36 +117,27 @@ function TrackedEntity() {
         ]),
     );
 
-    const trackedEntity = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity,
-    );
-    // Load relationships from database on component mount
-    useEffect(() => {
-        async function loadRelationships() {
-            if (!trackedEntity.trackedEntity) return;
+    const relationships = useLiveQuery(async () => {
+        if (!trackedEntity.trackedEntity) return [];
 
-            try {
-                const relationships = await populateRelationshipsForEntity(
-                    trackedEntity.trackedEntity,
-                );
-
-                if (relationships.length > 0) {
-                    console.log(
-                        `📊 Loaded ${relationships.length} relationships for tracked entity`,
-                        relationships,
-                    );
-                    trackerActor.send({
-                        type: "SET_RELATIONSHIPS",
-                        relationships: relationships,
-                    });
-                }
-            } catch (error) {
-                console.error("Failed to load relationships:", error);
-            }
+        try {
+            return await populateRelationshipsForEntity(
+                trackedEntity.trackedEntity,
+            );
+        } catch (error) {
+            console.error("Failed to load relationships:", error);
+            return [];
         }
+    }, [trackedEntity.trackedEntity]);
 
-        loadRelationships();
-    }, [trackedEntity.trackedEntity, trackerActor]);
+    useEffect(() => {
+        if (relationships && relationships.length > 0) {
+            trackerActor.send({
+                type: "SET_RELATIONSHIPS",
+                relationships: relationships,
+            });
+        }
+    }, [relationships, trackerActor]);
 
     const dataElementToAttributeMap: Record<string, string> = {
         KJ2V2JlOxFi: "Y3DE5CZWySr",
@@ -185,6 +187,36 @@ function TrackedEntity() {
     );
 
     const [visitForm] = Form.useForm();
+
+    const { updateDataValue, updateDataValues, markEventReady } =
+        useDexieEventForm({
+            currentEvent: mainEvent,
+        });
+
+    const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
+        form: visitForm,
+        programRules,
+        programRuleVariables,
+        programStage: "K2nxbE9ubSs",
+        trackedEntityAttributes: trackedEntity.attributes,
+        enrollment: trackedEntity.enrollment,
+        onAssignments: updateDataValues,
+        applyAssignmentsToForm: true,
+        persistAssignments: true,
+        program: program.id,
+    });
+
+    const { syncStatus, syncError } = useEventSyncStatus(mainEvent.event);
+    const events =
+        useLiveQuery(async () => {
+            if (!trackedEntity.trackedEntity) return [];
+            return await db.events
+                .where("trackedEntity")
+                .equals(trackedEntity.trackedEntity)
+                .and((e) => e.programStage === "K2nxbE9ubSs")
+                .toArray();
+        }, [trackedEntity.trackedEntity]) || [];
+
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState<string>("");
     const [currentVisitDate, setCurrentVisitDate] = useState<string | null>(
@@ -193,38 +225,12 @@ function TrackedEntity() {
     const [isNestedModalOpen, setIsNestedModalOpen] = useState(false);
     const [nestedModalKey, setNestedModalKey] = useState(0);
     const [nestedForm] = Form.useForm();
-    const { clearDraft } = useAutoSave({
-        form: visitForm,
-        draftId: mainEvent.event,
-        type: "event",
-        interval: 30000,
-        enabled: false,
-        metadata: {
-            trackedEntity: enrollment.trackedEntity,
-            programStage: "K2nxbE9ubSs",
-            enrollment: enrollment.enrollment,
-            orgUnit: enrollment.orgUnit,
-            program: enrollment.program,
-            isNew: !mainEvent.event || mainEvent.event.startsWith("temp"),
-        },
-        onSave: () => console.log("💾 Visit draft auto-saved"),
-    });
+    const [currentChildEntityId, setCurrentChildEntityId] = useState<
+        string | null
+    >(null);
 
-    const { triggerAutoSave, savingState, errorMessage, isEventCreated } =
-        useEventAutoSave({
-            form: visitForm,
-            event: mainEvent,
-            trackerActor,
-            ruleResult: ruleResult,
-            onEventCreated: (newEventId) => {
-                trackerActor.send({
-                    type: "UPDATE_EVENT_ID",
-                    oldId: mainEvent.event,
-                    newId: newEventId,
-                });
-                setModalKey(newEventId);
-            },
-        });
+    const { syncStatus: childSyncStatus, syncError: childSyncError } =
+        useEntitySyncStatus(currentChildEntityId);
 
     const onVisitSubmit = async (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
@@ -244,24 +250,11 @@ function TrackedEntity() {
                 ...dataValues,
                 ...ruleResult.assignments,
             };
-            const event: ReturnType<
-                typeof flattenTrackedEntity
-            >["events"][number] = {
-                ...mainEvent,
-                occurredAt,
-                dataValues: { ...mainEvent.dataValues, ...finalValues },
-            };
-            trackerActor.send({
-                type: "CREATE_OR_UPDATE_EVENT",
-                event,
-            });
-            trackerActor.send({ type: "SAVE_EVENTS" });
-
+            await updateDataValues(finalValues);
             message.success({
                 content: "Visit record saved successfully!",
                 duration: 3,
             });
-            await clearDraft();
             visitForm.resetFields();
             trackerActor.send({ type: "RESET_MAIN_EVENT" });
             setIsVisitModalOpen(false);
@@ -281,7 +274,7 @@ function TrackedEntity() {
         setIsVisitModalOpen(true);
     };
 
-    const showCreateVisitModal = () => {
+    const showCreateVisitModal = async () => {
         visitForm.resetFields();
         const emptyEvent = createEmptyEvent({
             program: enrollment.program,
@@ -297,7 +290,6 @@ function TrackedEntity() {
 
     const handleModalClose = async () => {
         setIsVisitModalOpen(false);
-        await clearDraft();
         trackerActor.send({ type: "RESET_MAIN_EVENT" });
         visitForm.resetFields();
     };
@@ -323,9 +315,7 @@ function TrackedEntity() {
                     trackedEntity.attributes[attributeId];
             }
         });
-        // Get current form values from visit form
         const currentFormValues = visitForm.getFieldsValue();
-        // Map data elements to attributes
         const mappedAttributes: Record<string, any> = {};
         Object.entries(dataElementToAttributeMap).forEach(
             ([dataElementId, attributeId]) => {
@@ -397,47 +387,47 @@ function TrackedEntity() {
 
             // Check for duplicate child (same birth date)
             const birthDate = values["Y3DE5CZWySr"]; // Birth date attribute
-            if (birthDate) {
-                const existingRelationships =
-                    await populateRelationshipsForEntity(
-                        mainEvent.trackedEntity,
-                    );
+            // if (birthDate && mainEvent) {
+            //     const existingRelationships =
+            //         await populateRelationshipsForEntity(
+            //             mainEvent.trackedEntity,
+            //         );
 
-                const duplicate = existingRelationships.find((rel) => {
-                    const child = rel.to.trackedEntity;
-                    // Check if child has attributes
-                    if (child.attributes) {
-                        // Handle both flattened format (object) and API format (array)
-                        const childBirthDate = Array.isArray(child.attributes)
-                            ? child.attributes.find(
-                                  (a) => a.attribute === "Y3DE5CZWySr",
-                              )?.value
-                            : child.attributes["Y3DE5CZWySr"];
-                        return childBirthDate === birthDate;
-                    }
-                    return false;
-                });
+            //     const duplicate = existingRelationships.find((rel) => {
+            //         const child = rel.to.trackedEntity;
+            //         // Check if child has attributes
+            //         if (child.attributes) {
+            //             // Handle both flattened format (object) and API format (array)
+            //             const childBirthDate = Array.isArray(child.attributes)
+            //                 ? child.attributes.find(
+            //                       (a) => a.attribute === "Y3DE5CZWySr",
+            //                   )?.value
+            //                 : child.attributes["Y3DE5CZWySr"];
+            //             return childBirthDate === birthDate;
+            //         }
+            //         return false;
+            //     });
 
-                if (duplicate) {
-                    // Show confirmation dialog
-                    Modal.confirm({
-                        title: "Possible Duplicate Child",
-                        content: `A child with birth date ${dayjs(birthDate).format("MMM DD, YYYY")} already exists. Do you want to continue?`,
-                        okText: "Continue Anyway",
-                        cancelText: "Cancel",
-                        onOk: async () => {
-                            // User confirmed, proceed with creation
-                            await createChildEntity(values);
-                        },
-                        onCancel: () => {
-                            console.log(
-                                "Child registration cancelled due to duplicate",
-                            );
-                        },
-                    });
-                    return; // Exit early, will continue in modal callback if confirmed
-                }
-            }
+            //     if (duplicate) {
+            //         // Show confirmation dialog
+            //         Modal.confirm({
+            //             title: "Possible Duplicate Child",
+            //             content: `A child with birth date ${dayjs(birthDate).format("MMM DD, YYYY")} already exists. Do you want to continue?`,
+            //             okText: "Continue Anyway",
+            //             cancelText: "Cancel",
+            //             onOk: async () => {
+            //                 // User confirmed, proceed with creation
+            //                 await createChildEntity(values);
+            //             },
+            //             onCancel: () => {
+            //                 console.log(
+            //                     "Child registration cancelled due to duplicate",
+            //                 );
+            //             },
+            //         });
+            //         return; // Exit early, will continue in modal callback if confirmed
+            //     }
+            // }
 
             // No duplicate, proceed with creation
             await createChildEntity(values);
@@ -456,15 +446,11 @@ function TrackedEntity() {
             const childTrackedEntity = createEmptyTrackedEntity({
                 orgUnit: enrollment.orgUnit,
             });
-
-            // Create child tracked entity first
             const newTrackedEntity: ReturnType<typeof flattenTrackedEntity> = {
                 ...childTrackedEntity,
                 attributes: values,
             };
-
-            // Convert flattened structure to BasicTrackedEntity format for the relationship
-            // The tabs component expects enrollments as an array
+            setCurrentChildEntityId(newTrackedEntity.trackedEntity);
             const childForRelationship = {
                 ...newTrackedEntity,
                 attributes: Object.entries(values).map(
@@ -478,53 +464,47 @@ function TrackedEntity() {
                 ),
                 enrollments: [newTrackedEntity.enrollment],
             };
-
-            // Create the relationship structure with both from (parent) and to (child)
-            // Include the full child entity in the relationship for immediate UI update
             const relationship = {
                 relationship: generateUid(),
                 relationshipType: "vDnDNhGRzzy",
                 from: {
                     trackedEntity: {
-                        trackedEntity: mainEvent.trackedEntity, // Parent/mother ID
+                        trackedEntity: mainEvent?.trackedEntity || "",
                     },
                 },
                 to: {
-                    trackedEntity: childForRelationship, // Full child entity for tabs
+                    trackedEntity: childForRelationship,
                 },
             };
 
-            // Add relationship to child for saving
             newTrackedEntity.relationships = [relationship] as any;
+            await saveTrackedEntity(newTrackedEntity);
 
-            console.log("👶 New child tracked entity with relationship:", {
-                trackedEntity: newTrackedEntity.trackedEntity,
-                orgUnit: newTrackedEntity.orgUnit,
-                trackedEntityType: newTrackedEntity.trackedEntityType,
-                attributes: newTrackedEntity.attributes,
-                relationships: newTrackedEntity.relationships,
-            });
-
-            // Send child entity creation with relationship included
-            // The state machine will automatically add the relationship to the mother's
-            // relationships array after saving
+            const saved = await db.trackedEntities.get(
+                newTrackedEntity.trackedEntity,
+            );
+            if (!saved) {
+                throw new Error("Failed to save child to local database");
+            }
             trackerActor.send({
-                type: "CREATE_TRACKED_CHILD_ENTITY",
-                trackedEntity: newTrackedEntity,
+                type: "ADD_CHILD_RELATIONSHIP",
+                relationship: relationship as any,
             });
-
             message.success({
                 content: "Child registered successfully!",
                 duration: 3,
             });
-
-            console.log("✅ Child registration actions sent to state machine");
         } catch (error) {
             console.error("❌ Error creating child:", error);
+            const errorMessage =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to register child. Please try again.";
             message.error({
-                content: `Failed to register child: ${error instanceof Error ? error.message : "Unknown error"}`,
+                content: errorMessage,
                 duration: 5,
             });
+            throw error; // Re-throw to prevent modal from closing
         }
     };
 
@@ -533,40 +513,36 @@ function TrackedEntity() {
 
     const handleNestedFormSubmit = async (createAnother: boolean = false) => {
         try {
-            console.log("🔄 Validating nested form...");
-
-            // Set the flag before submitting
             setShouldCreateAnotherChild(createAnother);
 
-            // Get all form field values before validation
             const allFieldValues = nestedForm.getFieldsValue();
-            console.log(
-                "📋 All form field values before validation:",
-                allFieldValues,
-            );
 
             const values = await nestedForm.validateFields();
-            console.log("✅ Validation passed, form values:", values);
-
-            // Manually call handleNestedSubmit with the validated values
             await handleNestedSubmit(values);
 
             closeNestedModal();
 
             if (shouldCreateAnotherChild) {
-                // Reset the flag
                 setShouldCreateAnotherChild(false);
-                // Open the modal again for another child
                 openNestedModal();
             }
         } catch (error) {
-            console.error("❌ Nested form validation failed:", error);
-            // Reset the flag if validation fails
+            console.error(
+                "❌ Nested form validation/submission failed:",
+                error,
+            );
+            // Reset the flag if validation or submission fails
             setShouldCreateAnotherChild(false);
-            message.error({
-                content: "Please fill in all required fields",
-                duration: 3,
-            });
+
+            // Only show validation error if it's a validation error
+            // Save errors are handled in createChildEntity
+            if (error && typeof error === "object" && "errorFields" in error) {
+                message.error({
+                    content: "Please fill in all required fields",
+                    duration: 3,
+                });
+            }
+            // Don't close modal on error so user can retry
         }
     };
     // ✅ OPTIMIZED: Memoized columns prevent Table re-renders
@@ -629,148 +605,21 @@ function TrackedEntity() {
         if (_changed && _changed["REWqohCg4Km"] === "Yes") {
             openNestedModal();
         }
-        trackerActor.send({
-            type: "EXECUTE_PROGRAM_RULES",
-            dataValues: allValues,
-            programRules,
-            programRuleVariables,
-            programStage: mainEvent.programStage,
-            attributeValues: trackedEntity.attributes,
-            ruleResultKey: "mainEventRuleResults",
-            enrollment: trackedEntity.enrollment,
-            ruleResultUpdateKey: "mainEvent",
-            updateKey: "dataValues",
-        });
-    }, [
-        visitForm,
-        trackerActor,
-        programRules,
-        programRuleVariables,
-        trackedEntity.attributes,
-        mainEvent.programStage,
-        trackedEntity.enrollment,
-    ]);
+        executeAndApplyRules();
+    }, [visitForm, executeAndApplyRules]);
 
     useEffect(() => {
-        const loadDraftIfExists = async () => {
-            if (!isVisitModalOpen) return;
-
-            // Reset form completely first to clear any previous data
-            visitForm.resetFields();
-
-            // Set initial visit date in state
-            setCurrentVisitDate(mainEvent.occurredAt || null);
-
-            // Then set only the mainEvent data
-            const initialFormValues = {
-                ...mainEvent.dataValues,
-                occurredAt: mainEvent.occurredAt,
-            };
-            visitForm.setFieldsValue(initialFormValues);
-
-            // Check if a draft exists for this event
-            const draft = await getEventDraft(mainEvent.event);
-            if (
-                draft &&
-                draft.dataValues &&
-                Object.keys(draft.dataValues).length > 0
-            ) {
-                // Ask user if they want to restore the draft
-                Modal.confirm({
-                    title: "Draft Found",
-                    content: `A saved draft was found for this visit (last saved: ${new Date(draft.updatedAt).toLocaleString()}). Would you like to restore it?`,
-                    okText: "Restore Draft",
-                    cancelText: "Start Fresh",
-                    onOk: () => {
-                        // Load draft data into form
-                        visitForm.setFieldsValue(draft.dataValues);
-                        message.success("Draft restored successfully");
-                        // Execute program rules with draft data
-                        trackerActor.send({
-                            type: "EXECUTE_PROGRAM_RULES",
-                            programRules: programRules,
-                            programRuleVariables: programRuleVariables,
-                            programStage: mainEvent.programStage,
-                            dataValues: {
-                                ...initialFormValues,
-                                ...draft.dataValues,
-                            },
-                            attributeValues: trackedEntity.attributes,
-                            ruleResultKey: "mainEventRuleResults",
-                            enrollment: trackedEntity.enrollment,
-                            ruleResultUpdateKey: "mainEvent",
-                            updateKey: "dataValues",
-                        });
-                    },
-                    onCancel: () => {
-                        // User chose to start fresh, do nothing
-                        message.info("Starting with a fresh form");
-                        // Execute program rules with initial data
-                        trackerActor.send({
-                            type: "EXECUTE_PROGRAM_RULES",
-                            programRules: programRules,
-                            programRuleVariables: programRuleVariables,
-                            programStage: mainEvent.programStage,
-                            dataValues: initialFormValues,
-                            attributeValues: trackedEntity.attributes,
-                            ruleResultKey: "mainEventRuleResults",
-                            enrollment: trackedEntity.enrollment,
-                            ruleResultUpdateKey: "mainEvent",
-                            updateKey: "dataValues",
-                        });
-                    },
-                });
-            } else {
-                // No draft, execute program rules with initial data
-                trackerActor.send({
-                    type: "EXECUTE_PROGRAM_RULES",
-                    programRules: programRules,
-                    programRuleVariables: programRuleVariables,
-                    programStage: mainEvent.programStage,
-                    dataValues: initialFormValues,
-                    attributeValues: trackedEntity.attributes,
-                    ruleResultKey: "mainEventRuleResults",
-                    enrollment: trackedEntity.enrollment,
-                    ruleResultUpdateKey: "mainEvent",
-                    updateKey: "dataValues",
-                });
-            }
-        };
-        loadDraftIfExists();
-    }, [isVisitModalOpen, mainEvent.event]);
-
-    useEffect(() => {
-        if (isVisitModalOpen) {
-            if (Object.keys(ruleResult.assignments).length > 0) {
-                visitForm.setFieldsValue(ruleResult.assignments);
-
-                // Trigger auto-save for program rule assignments if event already created
-                if (isEventCreated) {
-                    Object.entries(ruleResult.assignments).forEach(
-                        ([key, value]) => {
-                            triggerAutoSave(key, value);
-                        },
-                    );
-                }
-            }
-            if (ruleResult.hiddenOptions["QwsvSPpnRul"]) {
-                setServiceTypes((prev) =>
-                    prev.flatMap((o) => {
-                        if (ruleResult.hiddenOptions["QwsvSPpnRul"].has(o.id)) {
-                            return [];
-                        }
-                        return o;
-                    }),
-                );
-            }
+        if (ruleResult.hiddenOptions["mrKZWf2WMIC"]?.size > 0) {
+            setServiceTypes((prev) =>
+                prev.flatMap((o) => {
+                    if (ruleResult.hiddenOptions["mrKZWf2WMIC"].has(o.id)) {
+                        return [];
+                    }
+                    return o;
+                }),
+            );
         }
-    }, [
-        ruleResult,
-        isVisitModalOpen,
-        visitForm,
-        isEventCreated,
-        triggerAutoSave,
-    ]);
+    }, [ruleResult.hiddenOptions["mrKZWf2WMIC"], isVisitModalOpen]);
 
     const [activeKey, setActiveKey] = useState<string>(
         "K2nxbE9ubSs-bnV62fxQmoE",
@@ -972,25 +821,10 @@ function TrackedEntity() {
                                 </Text>
                             </Text>
 
-                            {/* Auto-save indicator */}
-                            {savingState !== "idle" && (
+                            {/* Sync status indicator */}
+                            {syncStatus && syncStatus !== "draft" && (
                                 <Flex align="center" gap="small">
-                                    {savingState === "saving" && (
-                                        <>
-                                            <LoadingOutlined
-                                                style={{ color: "#1890ff" }}
-                                            />
-                                            <Text
-                                                type="secondary"
-                                                style={{ fontSize: 12 }}
-                                            >
-                                                {isEventCreated
-                                                    ? "Saving..."
-                                                    : "Creating visit..."}
-                                            </Text>
-                                        </>
-                                    )}
-                                    {savingState === "saved" && (
+                                    {syncStatus === "synced" && (
                                         <>
                                             <CheckCircleOutlined
                                                 style={{ color: "#52c41a" }}
@@ -999,11 +833,41 @@ function TrackedEntity() {
                                                 type="success"
                                                 style={{ fontSize: 12 }}
                                             >
-                                                Saved
+                                                Synced
                                             </Text>
                                         </>
                                     )}
-                                    {savingState === "error" && (
+                                    {syncStatus === "pending" && (
+                                        <>
+                                            <CheckCircleOutlined
+                                                style={{ color: "#1890ff" }}
+                                            />
+                                            <Text
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: "#1890ff",
+                                                }}
+                                            >
+                                                Saved (pending sync)
+                                            </Text>
+                                        </>
+                                    )}
+                                    {syncStatus === "syncing" && (
+                                        <>
+                                            <LoadingOutlined
+                                                style={{ color: "#1890ff" }}
+                                            />
+                                            <Text
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: "#1890ff",
+                                                }}
+                                            >
+                                                Syncing...
+                                            </Text>
+                                        </>
+                                    )}
+                                    {syncStatus === "failed" && (
                                         <>
                                             <ExclamationCircleOutlined
                                                 style={{ color: "#faad14" }}
@@ -1012,7 +876,7 @@ function TrackedEntity() {
                                                 type="warning"
                                                 style={{ fontSize: 12 }}
                                             >
-                                                {errorMessage}
+                                                {syncError || "Sync failed"}
                                             </Text>
                                         </>
                                     )}
@@ -1064,8 +928,8 @@ function TrackedEntity() {
                     onFinish={onVisitSubmit}
                     style={{ margin: 0, padding: 0 }}
                     initialValues={{
-                        ...mainEvent.dataValues,
-                        occurredAt: mainEvent.occurredAt,
+                        ...mainEvent?.dataValues,
+                        occurredAt: mainEvent?.occurredAt,
                     }}
                 >
                     <Flex vertical gap={10} style={{ width: "100%" }}>
@@ -1170,25 +1034,6 @@ function TrackedEntity() {
                                 "sortOrder",
                                 "asc",
                             ).flatMap((stage) => {
-                                const currentDataElements = new Map(
-                                    stage.programStageDataElements.map(
-                                        (psde) => [
-                                            psde.dataElement.id,
-                                            {
-                                                allowFutureDate:
-                                                    psde.allowFutureDate,
-                                                renderOptionsAsRadio:
-                                                    psde.renderType !==
-                                                    undefined,
-                                                compulsory: psde.compulsory,
-                                                desktopRenderType:
-                                                    psde.renderType?.DESKTOP
-                                                        ?.type,
-                                            },
-                                        ],
-                                    ),
-                                );
-
                                 if (stage.id === "opwSN351xGC") {
                                     return [];
                                 }
@@ -1228,172 +1073,18 @@ function TrackedEntity() {
                                                 section.displayName ||
                                                 section.name,
                                             children: (
-                                                <Card>
-                                                    <Row gutter={24}>
-                                                        {section.dataElements.flatMap(
-                                                            (dataElement) => {
-                                                                const currentDataElement =
-                                                                    dataElements.get(
-                                                                        dataElement.id,
-                                                                    );
-                                                                const {
-                                                                    compulsory = false,
-                                                                    desktopRenderType,
-                                                                } =
-                                                                    currentDataElements.get(
-                                                                        dataElement.id,
-                                                                    ) || {};
-
-                                                                const optionSet =
-                                                                    currentDataElement
-                                                                        ?.optionSet
-                                                                        ?.id ??
-                                                                    "";
-
-                                                                const hiddenOptions =
-                                                                    ruleResult
-                                                                        .hiddenOptions[
-                                                                        dataElement
-                                                                            .id
-                                                                    ];
-
-                                                                const shownOptionGroups =
-                                                                    ruleResult
-                                                                        .shownOptionGroups[
-                                                                        dataElement
-                                                                            .id
-                                                                    ] ||
-                                                                    new Set<string>();
-
-                                                                let finalOptions =
-                                                                    optionSets
-                                                                        .get(
-                                                                            optionSet,
-                                                                        )
-                                                                        ?.flatMap(
-                                                                            (
-                                                                                o,
-                                                                            ) => {
-                                                                                if (
-                                                                                    hiddenOptions?.has(
-                                                                                        o.id,
-                                                                                    )
-                                                                                ) {
-                                                                                    return [];
-                                                                                }
-                                                                                return o;
-                                                                            },
-                                                                        );
-
-                                                                if (
-                                                                    ruleResult.hiddenFields.has(
-                                                                        dataElement.id,
-                                                                    )
-                                                                ) {
-                                                                    return [];
-                                                                }
-
-                                                                if (
-                                                                    shownOptionGroups.size >
-                                                                    0
-                                                                ) {
-                                                                    const currentOptions =
-                                                                        optionGroups.get(
-                                                                            shownOptionGroups
-                                                                                .values()
-                                                                                .next()
-                                                                                .value,
-                                                                        ) ?? [];
-                                                                    finalOptions =
-                                                                        currentOptions.map(
-                                                                            ({
-                                                                                code,
-                                                                                id,
-                                                                                name,
-                                                                            }) => ({
-                                                                                id,
-                                                                                code,
-                                                                                name,
-                                                                                optionSet,
-                                                                            }),
-                                                                        );
-                                                                }
-
-                                                                const errors =
-                                                                    ruleResult.errors.filter(
-                                                                        (msg) =>
-                                                                            msg.key ===
-                                                                            dataElement.id,
-                                                                    );
-                                                                const messages =
-                                                                    ruleResult.messages.filter(
-                                                                        (msg) =>
-                                                                            msg.key ===
-                                                                            dataElement.id,
-                                                                    );
-                                                                const warnings =
-                                                                    ruleResult.warnings.filter(
-                                                                        (msg) =>
-                                                                            msg.key ===
-                                                                            dataElement.id,
-                                                                    );
-
-                                                                return (
-                                                                    <DataElementField
-                                                                        dataElement={
-                                                                            currentDataElement!
-                                                                        }
-                                                                        hidden={
-                                                                            false
-                                                                        }
-                                                                        desktopRenderType={
-                                                                            desktopRenderType!
-                                                                        }
-                                                                        finalOptions={
-                                                                            finalOptions
-                                                                        }
-                                                                        messages={
-                                                                            messages
-                                                                        }
-                                                                        warnings={
-                                                                            warnings
-                                                                        }
-                                                                        errors={
-                                                                            errors
-                                                                        }
-                                                                        required={
-                                                                            compulsory
-                                                                        }
-                                                                        key={
-                                                                            dataElement.id
-                                                                        }
-                                                                        form={
-                                                                            visitForm
-                                                                        }
-                                                                        onTriggerProgramRules={
-                                                                            handleTriggerProgramRules
-                                                                        }
-                                                                        onAutoSave={
-                                                                            triggerAutoSave
-                                                                        }
-                                                                    />
-                                                                );
-                                                            },
-                                                        )}
-                                                    </Row>
-                                                    {[
-                                                        "Maternity",
-                                                        "Postnatal",
-                                                    ].includes(
-                                                        section.name,
-                                                    ) && (
-                                                        <RelationshipEvent
-                                                            section={
-                                                                section.name
-                                                            }
-                                                        />
-                                                    )}
-                                                </Card>
+                                                <SectionCapture
+                                                    section={section}
+                                                    stage={stage}
+                                                    ruleResult={ruleResult}
+                                                    form={visitForm}
+                                                    handleTriggerProgramRules={
+                                                        handleTriggerProgramRules
+                                                    }
+                                                    updateDataValue={
+                                                        updateDataValue
+                                                    }
+                                                />
                                             ),
                                         },
                                     ];
@@ -1453,46 +1144,111 @@ function TrackedEntity() {
                 width="85vw"
                 footer={
                     <Flex
-                        justify="end"
-                        gap="middle"
+                        justify="space-between"
+                        align="center"
                         style={{ padding: "8px 0" }}
                     >
-                        <Button
-                            onClick={closeNestedModal}
-                            style={{ borderRadius: 8 }}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            type="primary"
-                            onClick={() => handleNestedFormSubmit(false)}
-                            style={{
-                                background:
-                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
-                                borderColor: "#7c3aed",
-                                borderRadius: 8,
-                                fontWeight: 500,
-                                paddingLeft: 32,
-                                paddingRight: 32,
-                            }}
-                        >
-                            Register Child & Exit
-                        </Button>
-                        <Button
-                            type="primary"
-                            onClick={() => handleNestedFormSubmit(true)}
-                            style={{
-                                background:
-                                    "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
-                                borderColor: "#7c3aed",
-                                borderRadius: 8,
-                                fontWeight: 500,
-                                paddingLeft: 32,
-                                paddingRight: 32,
-                            }}
-                        >
-                            Register Child & Add Another
-                        </Button>
+                        {childSyncStatus && childSyncStatus !== "draft" && (
+                            <Flex align="center" gap="small">
+                                {childSyncStatus === "synced" && (
+                                    <>
+                                        <CheckCircleOutlined
+                                            style={{ color: "#52c41a" }}
+                                        />
+                                        <Text
+                                            type="success"
+                                            style={{ fontSize: 12 }}
+                                        >
+                                            Synced
+                                        </Text>
+                                    </>
+                                )}
+                                {childSyncStatus === "pending" && (
+                                    <>
+                                        <CheckCircleOutlined
+                                            style={{ color: "#1890ff" }}
+                                        />
+                                        <Text
+                                            style={{
+                                                fontSize: 12,
+                                                color: "#1890ff",
+                                            }}
+                                        >
+                                            Saved (pending sync)
+                                        </Text>
+                                    </>
+                                )}
+                                {childSyncStatus === "syncing" && (
+                                    <>
+                                        <CheckCircleOutlined
+                                            style={{ color: "#1890ff" }}
+                                        />
+                                        <Text
+                                            style={{
+                                                fontSize: 12,
+                                                color: "#1890ff",
+                                            }}
+                                        >
+                                            Syncing...
+                                        </Text>
+                                    </>
+                                )}
+                                {childSyncStatus === "failed" && (
+                                    <>
+                                        <ExclamationCircleOutlined
+                                            style={{ color: "#faad14" }}
+                                        />
+                                        <Text
+                                            type="warning"
+                                            style={{ fontSize: 12 }}
+                                        >
+                                            {childSyncError || "Sync failed"}
+                                        </Text>
+                                    </>
+                                )}
+                            </Flex>
+                        )}
+                        {(!childSyncStatus || childSyncStatus === "draft") && (
+                            <div />
+                        )}
+                        <Flex gap="middle">
+                            <Button
+                                onClick={closeNestedModal}
+                                style={{ borderRadius: 8 }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={() => handleNestedFormSubmit(false)}
+                                style={{
+                                    background:
+                                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 8,
+                                    fontWeight: 500,
+                                    paddingLeft: 32,
+                                    paddingRight: 32,
+                                }}
+                            >
+                                Register Child & Exit
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={() => handleNestedFormSubmit(true)}
+                                style={{
+                                    background:
+                                        "linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)",
+                                    borderColor: "#7c3aed",
+                                    borderRadius: 8,
+                                    fontWeight: 500,
+                                    paddingLeft: 32,
+                                    paddingRight: 32,
+                                }}
+                            >
+                                Register Child & Add Another
+                            </Button>
+                        </Flex>
                     </Flex>
                 }
                 styles={{
@@ -1562,7 +1318,15 @@ function TrackedEntity() {
                                                     warnings={[]}
                                                     errors={[]}
                                                     required={mandatory}
-                                                    span={6}
+                                                    span={
+                                                        spans.get(id) ||
+                                                        calculateColSpan(
+                                                            tei.length,
+                                                            6,
+                                                        )
+                                                    }
+                                                    onTriggerProgramRules={() => {}}
+                                                    onAutoSave={() => {}}
                                                     form={nestedForm}
                                                     customLabel={
                                                         attributeLabelOverrides[

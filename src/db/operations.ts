@@ -89,12 +89,27 @@ export async function deleteTrackedEntity(id: string): Promise<void> {
 }
 
 /**
- * Bulk save tracked entities (useful for initial sync)
+ * Bulk save tracked entities (useful for initial sync and search results)
+ * @param entities - Tracked entities to save
+ * @param syncStatus - Optional sync status to set (default: "synced" for search results)
  */
 export async function bulkSaveTrackedEntities(
     entities: FlattenedTrackedEntity[],
+    syncStatus: "synced" | "pending" | "draft" = "synced",
 ): Promise<void> {
-    await db.trackedEntities.bulkPut(entities);
+    // Add sync metadata to entities before saving
+    const entitiesWithMetadata = entities.map((entity) => {
+        const entityWithSync = entity as any;
+        return {
+            ...entity,
+            syncStatus: entityWithSync.syncStatus || syncStatus,
+            version: entityWithSync.version || 1,
+            lastModified: entityWithSync.lastModified || new Date().toISOString(),
+            lastSynced: syncStatus === "synced" ? new Date().toISOString() : entityWithSync.lastSynced,
+        };
+    });
+
+    await db.trackedEntities.bulkPut(entitiesWithMetadata as any);
 }
 
 // ============================================================================

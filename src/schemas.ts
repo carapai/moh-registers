@@ -1,6 +1,5 @@
 import { GetProp, TablePaginationConfig, TreeSelectProps } from "antd";
 import { FilterValue } from "antd/es/table/interface";
-import Base from "antd/es/typography/Base";
 import z from "zod";
 
 const RenderTypeSchema = z.object({
@@ -308,7 +307,7 @@ export const TrackedEntitySchema = BasicTrackedEntitySchema.extend({
     relationships: z.array(
         z.object({
             relationship: z.string(),
-						relationshipType: z.string(),
+            relationshipType: z.string(),
             to: z.object({
                 trackedEntity: BasicTrackedEntitySchema,
             }),

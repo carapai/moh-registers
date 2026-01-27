@@ -32,9 +32,10 @@ export const DataElementField = React.memo<{
     span?: number;
     form: FormInstance<any>;
     customLabel?: string;
-    onTriggerProgramRules?: () => void;
-    onAutoSave?: (dataElementId: string, value: any) => void;
+    onTriggerProgramRules: () => void;
+    onAutoSave: (dataElementId: string, value: any) => void;
     desktopRenderType?: RenderType["type"];
+    disabled?: boolean; // Disable field (e.g., for assigned values from program rules)
 }>(
     ({
         dataElement,
@@ -50,6 +51,7 @@ export const DataElementField = React.memo<{
         desktopRenderType,
         onTriggerProgramRules,
         onAutoSave,
+        disabled = false,
     }) => {
         if (hidden) return null;
         // Determine if this field should trigger rules on blur or change
@@ -60,11 +62,12 @@ export const DataElementField = React.memo<{
 
         let element: React.ReactNode = (
             <Input
+                disabled={disabled}
                 onBlur={
                     isTextInput
                         ? (e) => {
-                              onTriggerProgramRules?.();
-                              onAutoSave?.(dataElement.id, e.target.value);
+                              onTriggerProgramRules();
+                              onAutoSave(dataElement.id, e.target.value);
                           }
                         : undefined
                 }
@@ -94,6 +97,7 @@ export const DataElementField = React.memo<{
         ) {
             element = (
                 <Select
+                    disabled={disabled}
                     style={{ width: "100%" }}
                     options={finalOptions}
                     fieldNames={{
@@ -103,8 +107,8 @@ export const DataElementField = React.memo<{
                     allowClear
                     mode="multiple"
                     onChange={(value) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(dataElement.id, value);
+                        onTriggerProgramRules();
+                        onAutoSave(dataElement.id, value);
                     }}
                     showSearch={{
                         filterOption: (input, option) =>
@@ -132,11 +136,12 @@ export const DataElementField = React.memo<{
 
             element = (
                 <Radio.Group
+                    disabled={disabled}
                     vertical={desktopRenderType === "VERTICAL_RADIOBUTTONS"}
                     value={currentValue}
                     onChange={(e) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(dataElement.id, e.target.value);
+                        onTriggerProgramRules();
+                        onAutoSave(dataElement.id, e.target.value);
                     }}
                 >
                     {finalOptions?.map((o) => (
@@ -152,8 +157,8 @@ export const DataElementField = React.memo<{
                                         dataElement.id,
                                         undefined,
                                     );
-                                    onTriggerProgramRules?.();
-                                    onAutoSave?.(dataElement.id, undefined);
+                                    onTriggerProgramRules();
+                                    onAutoSave(dataElement.id, undefined);
                                 }
                             }}
                         >
@@ -165,6 +170,7 @@ export const DataElementField = React.memo<{
         } else if (dataElement.optionSetValue && dataElement.optionSet) {
             element = (
                 <Select
+                    disabled={disabled}
                     style={{ width: "100%" }}
                     options={finalOptions}
                     fieldNames={{
@@ -173,8 +179,8 @@ export const DataElementField = React.memo<{
                     }}
                     allowClear
                     onChange={(value) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(dataElement.id, value);
+                        onTriggerProgramRules();
+                        onAutoSave(dataElement.id, value);
                     }}
                     showSearch={{
                         filterOption: (input, option) =>
@@ -192,9 +198,10 @@ export const DataElementField = React.memo<{
         } else if (dataElement.valueType === "BOOLEAN") {
             element = (
                 <Checkbox
+                    disabled={disabled}
                     onChange={(e) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(dataElement.id, e.target.checked);
+                        onTriggerProgramRules();
+                        onAutoSave(dataElement.id, e.target.checked);
                     }}
                 >
                     {dataElement.formName ?? dataElement.name}
@@ -207,18 +214,20 @@ export const DataElementField = React.memo<{
                     dataElement={dataElement}
                     onTriggerProgramRules={onTriggerProgramRules}
                     onAutoSave={onAutoSave}
+                    disabled={disabled}
                 />
             );
         } else if (dataElement.valueType === "DATETIME") {
             element = (
                 <DatePicker
+                    disabled={disabled}
                     style={{
                         width: "100%",
                     }}
                     showTime
                     onChange={(date) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(
+                        onTriggerProgramRules();
+                        onAutoSave(
                             dataElement.id,
                             date
                                 ? date.format("YYYY-MM-DDTHH:mm:ss")
@@ -230,12 +239,13 @@ export const DataElementField = React.memo<{
         } else if (isDate(dataElement.valueType)) {
             element = (
                 <DatePicker
+                    disabled={disabled}
                     style={{
                         width: "100%",
                     }}
                     onChange={(date) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(
+                        onTriggerProgramRules();
+                        onAutoSave(
                             dataElement.id,
                             date ? date.format("YYYY-MM-DD") : undefined,
                         );
@@ -245,10 +255,11 @@ export const DataElementField = React.memo<{
         } else if (dataElement.valueType === "LONG_TEXT") {
             element = (
                 <Input.TextArea
+                    disabled={disabled}
                     rows={4}
                     onBlur={(e) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(dataElement.id, e.target.value);
+                        onTriggerProgramRules();
+                        onAutoSave(dataElement.id, e.target.value);
                     }}
                 />
             );
@@ -259,12 +270,13 @@ export const DataElementField = React.memo<{
         ) {
             element = (
                 <InputNumber
+                    disabled={disabled}
                     style={{
                         width: "100%",
                     }}
                     onBlur={(e) => {
-                        onTriggerProgramRules?.();
-                        onAutoSave?.(
+                        onTriggerProgramRules();
+                        onAutoSave(
                             dataElement.id,
                             e.target.value ? Number(e.target.value) : undefined,
                         );
@@ -277,8 +289,8 @@ export const DataElementField = React.memo<{
             <Col
                 key={dataElement.id}
                 sm={{ span: 24 }}
-                md={{ span: 12 }}
-                lg={{ span: 8 }}
+                md={{ span: 24 }}
+                lg={{ span: 12 }}
                 xs={{ span: 24 }}
                 xl={{ span }}
             >

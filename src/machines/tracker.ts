@@ -4,6 +4,7 @@ import { createActorContext } from "@xstate/react";
 import { MessageInstance } from "antd/es/message/interface";
 import { assertEvent, assign, fromPromise, setup } from "xstate";
 import {
+    db,
     FlattenedEvent,
     FlattenedRelationship,
     FlattenedTrackedEntity,
@@ -206,7 +207,7 @@ export const trackerMachine = setup({
                 program: "ueBhWkWll5v",
                 orgUnitMode: "ACCESSIBLE",
                 order: "updatedAt:DESC",
-                fields: "trackedEntity,orgUnit,createdAt,updatedAt,inactive,attributes,relationships[relationship,to],enrollments[*,events[*]]",
+                fields: "trackedEntity,trackedEntityType,orgUnit,createdAt,updatedAt,createdAtClient,updatedAtClient,inactive,deleted,potentialDuplicate,attributes,relationships[relationship,to],enrollments[*,events[*]]",
             });
 
             if (Object.keys(search.filters || {}).length > 0) {
@@ -235,7 +236,17 @@ export const trackerMachine = setup({
                         ],
                     }),
                 );
-                return flattenTrackedEntityResponse(data);
+                const flattened = flattenTrackedEntityResponse(data);
+                const events = flattened.flatMap((te) => te.events || []);
+                const relationships = flattened.flatMap(
+                    (te) => te.relationships,
+                );
+
+                await db.relationships.bulkPut(relationships);
+                await db.events.bulkPut(events);
+                await db.trackedEntities.bulkPut(flattened);
+
+                return flattened;
             }
             return [];
         }),
@@ -447,7 +458,12 @@ export const trackerMachine = setup({
 
         persistTrackedEntities: async ({ context }) => {
             if (context.trackedEntities.length > 0) {
-                await bulkSaveTrackedEntities(context.trackedEntities);
+                // Search results from DHIS2 should be marked as "synced"
+                // to prevent triggering sync back to the server
+                await bulkSaveTrackedEntities(
+                    context.trackedEntities,
+                    "synced",
+                );
             }
         },
 
@@ -604,36 +620,38 @@ export const trackerMachine = setup({
         input: { engine, navigate, orgUnit, syncManager, message },
     }) => {
         const defaultOrgUnit = orgUnit.id;
+        const patient = createEmptyTrackedEntity({
+            orgUnit: defaultOrgUnit,
+        });
+        const childPatient = createEmptyTrackedEntity({
+            orgUnit: defaultOrgUnit,
+        });
         return {
             trackedEntities: [],
             engine,
             navigate,
             orgUnit,
-            trackedEntity: createEmptyTrackedEntity({
-                orgUnit: defaultOrgUnit,
-            }),
-            childTrackedEntity: createEmptyTrackedEntity({
-                orgUnit: defaultOrgUnit,
-            }),
+            trackedEntity: patient,
+            childTrackedEntity: childPatient,
             currentEvent: createEmptyEvent({
                 orgUnit: defaultOrgUnit,
                 program: "ueBhWkWll5v",
-                trackedEntity: "",
-                enrollment: "",
+                trackedEntity: patient.trackedEntity,
+                enrollment: patient.enrollment.enrollment,
                 programStage: "K2nxbE9ubSs",
             }),
             mainEvent: createEmptyEvent({
                 orgUnit: defaultOrgUnit,
                 program: "ueBhWkWll5v",
-                trackedEntity: "",
-                enrollment: "",
+                trackedEntity: patient.trackedEntity,
+                enrollment: patient.enrollment.enrollment,
                 programStage: "K2nxbE9ubSs",
             }),
             childEvent: createEmptyEvent({
                 orgUnit: defaultOrgUnit,
                 program: "ueBhWkWll5v",
-                trackedEntity: "",
-                enrollment: "",
+                trackedEntity: childPatient.trackedEntity,
+                enrollment: childPatient.enrollment.enrollment,
                 programStage: "K2nxbE9ubSs",
             }),
             trackedEntityId: "",
@@ -1067,8 +1085,10 @@ export const trackerMachine = setup({
                             trackedEntity: ({ context }) => ({
                                 ...context.trackedEntity,
                                 relationships: [
-                                    ...(context.trackedEntity.relationships || []),
-                                    ...(context.pendingChildRelationships || []),
+                                    ...(context.trackedEntity.relationships ||
+                                        []),
+                                    ...(context.pendingChildRelationships ||
+                                        []),
                                 ],
                             }),
                             pendingChildRelationships: undefined,

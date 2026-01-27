@@ -11,6 +11,8 @@ import {
 } from "../schemas";
 import { generateUid } from "./id";
 
+const GRID_TOTAL = 24;
+
 export const flattenTrackedEntityResponse = (te: TrackedEntityResponse) => {
     return te.trackedEntities.map((trackedEntity) => {
         return flattenTrackedEntity(trackedEntity);
@@ -49,8 +51,46 @@ export const flattenTrackedEntity = ({
         return {
             ...event,
             dataValues: eventAttrs,
+            syncStatus: "synced",
+            version: 1,
+            lastSynced: new Date().toISOString(),
+            syncError: "",
         };
     });
+
+    const trackedEntityRelationships = relationships.map((rel) => {
+        return {
+            ...rel,
+            syncStatus: "synced",
+            version: 1,
+            lastSynced: new Date().toISOString(),
+            syncError: "",
+        };
+    });
+
+    const enrollmentRelationships = enrollments.flatMap((enr) =>
+        enr.relationships?.map((rel) => {
+            return {
+                ...enr,
+                syncStatus: "synced",
+                version: 1,
+                lastSynced: new Date().toISOString(),
+                syncError: "",
+            };
+        }),
+    );
+
+    const eventRelationships = flattenedEvents.flatMap((ev) =>
+        ev.relationships?.map((rel) => {
+            return {
+                ...ev,
+                syncStatus: "synced",
+                version: 1,
+                lastSynced: new Date().toISOString(),
+                syncError: "",
+            };
+        }),
+    );
 
     return {
         ...rest,
@@ -58,7 +98,15 @@ export const flattenTrackedEntity = ({
         enrollment: enrollmentDetails,
         events: flattenedEvents,
         trackedEntity,
-        relationships,
+        relationships: [
+            ...eventRelationships,
+            ...enrollmentRelationships,
+            ...trackedEntityRelationships,
+        ],
+        syncStatus: "synced",
+        version: 1,
+        lastSynced: new Date().toISOString(),
+        syncError: "",
     };
 };
 
@@ -95,7 +143,7 @@ export function executeProgramRules({
     dataValues?: Record<string, any>;
     attributeValues?: Record<string, any>;
     programStage?: string;
-    program?: string;
+    program: string;
     enrollment?: { enrolledAt?: string; occurredAt?: string };
 }): ProgramRuleResult {
     const variableValues: Record<string, any> = {};
@@ -163,8 +211,24 @@ export function executeProgramRules({
 
         validatePattern: (value: string, pattern: string): boolean => {
             try {
-                const regex = new RegExp(pattern);
-                return regex.test(String(value));
+                // Anchor the pattern to match the entire string (not just a substring)
+                // Add ^ at start and $ at end if not already present
+                const anchoredPattern =
+                    pattern.startsWith("^") && pattern.endsWith("$")
+                        ? pattern
+                        : `^${pattern}$`;
+
+                const regex = new RegExp(anchoredPattern);
+                const test = regex.test(String(value));
+                console.log("Validating pattern:", {
+                    value,
+                    pattern,
+                    anchoredPattern,
+                    regex,
+                    test,
+                });
+
+                return test;
             } catch {
                 return false;
             }
@@ -495,7 +559,7 @@ export function executeProgramRules({
     };
 
     // Step 2: Safely evaluate rule condition with d2 function support
-    const evaluateCondition = (condition: string): boolean => {
+    const evaluateCondition = (condition: string, log = false): boolean => {
         // First replace d2: function calls with JavaScript function calls
         let processedCondition = condition ?? "";
 
@@ -532,7 +596,6 @@ export function executeProgramRules({
             const processedArgs = args
                 .map((arg: string) => {
                     arg = arg.trim();
-
                     // Functions that need variable name instead of value
                     const needsVarName = [
                         "hasValue",
@@ -664,8 +727,12 @@ export function executeProgramRules({
             continue;
         }
 
-        // Filter rules based on context (registration vs event)
         if (programStage === undefined) {
+            // console.log(
+            //     `Evaluating Rule: ${rule.name} (Program: ${rule.program?.id}, Stage: ${rule.programStage?.id})`,
+            // );
+
+            // Filter rules based on context (registration vs event)
             // Registration context: only apply rules without a programStage
             if (rule.programStage) {
                 continue;
@@ -676,10 +743,16 @@ export function executeProgramRules({
                 continue;
             }
         }
-        const isTrue = evaluateCondition(rule.condition);
-        // console.log(
-        //     `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
-        // );
+        let isTrue = evaluateCondition(
+            rule.condition,
+            rule.id === "BAzbfqToB1z",
+        );
+
+        if (rule.id === "BAzbfqToB1z") {
+            console.log(
+                `📋 Rule "${rule.name}": condition="${rule.condition}" → ${isTrue ? "✅ TRUE" : "❌ FALSE"}`,
+            );
+        }
         if (!isTrue) {
             continue;
         }
@@ -706,10 +779,11 @@ export function executeProgramRules({
             switch (action.programRuleActionType) {
                 case "ASSIGN":
                     if (targetId && action.data) {
-                        const evaluatedValue = evaluateExpression(action.data);
                         console.log(
-                            `  ✏️  ASSIGN: ${targetId} = ${action.data} → ${evaluatedValue}`,
+                            `  📝 ASSIGN: ${targetId} = ${action.data}`,
                         );
+                        const evaluatedValue = evaluateExpression(action.data);
+                        console.log("➡️  Evaluated Value:", evaluatedValue);
                         result.assignments[targetId] = evaluatedValue;
                     }
                     break;
@@ -890,6 +964,10 @@ export const createEmptyTrackedEntity = ({
         potentialDuplicate: false,
         trackedEntity,
         relationships: [],
+        lastSynced: "",
+        syncError: "",
+        syncStatus: "draft",
+        version: 1,
     };
 };
 
@@ -905,8 +983,9 @@ export const createEmptyEvent = ({
     trackedEntity: string;
     enrollment: string;
     programStage: string;
-}): ReturnType<typeof flattenTrackedEntity>["events"][number] => {
+}) => {
     const eventId = generateUid();
+    const now = dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ");
     return {
         event: eventId,
         program,
@@ -919,9 +998,15 @@ export const createEmptyEvent = ({
         occurredAt: dayjs().format("YYYY-MM-DD"),
         followUp: false,
         deleted: false,
-        createdAt: dayjs().format("YYYY-MM-DD"),
-        updatedAt: dayjs().format("YYYY-MM-DD"),
+        createdAt: now,
+        updatedAt: now,
+        createdAtClient: now,
+        updatedAtClient: now,
         relationships: [],
+        lastSynced: "",
+        syncError: "",
+        syncStatus: "draft",
+        version: 1,
     };
 };
 
@@ -986,3 +1071,20 @@ export const createEmptyProgramRuleResult = (): ProgramRuleResult => {
         shownOptionGroups: {},
     };
 };
+
+export function calculateColSpan(
+    fieldCount: number,
+    preferredColSpan: number,
+): number {
+    if (fieldCount <= 0) return preferredColSpan;
+    const maxColsByPreference = GRID_TOTAL / preferredColSpan;
+    const actualCols = Math.min(fieldCount, maxColsByPreference);
+    return Math.floor(GRID_TOTAL / actualCols);
+}
+
+export const spans = new Map<string, number>([
+    ["XjgpfkoxffK", 5],
+    ["W87HAtUHJjB", 5],
+    ["PKuyTiVCR89", 5],
+    ["oTI0DLitzFY", 9],
+]);

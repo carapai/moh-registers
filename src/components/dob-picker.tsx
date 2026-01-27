@@ -1,6 +1,6 @@
 import { DatePicker, Flex, FormInstance, InputNumber, Typography } from "antd";
 import dayjs from "dayjs";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { DataElement, TrackedEntityAttribute } from "../schemas";
 
 function dobFromAge(years = 0, months = 0, days = 0) {
@@ -30,16 +30,30 @@ export default function DobPicker({
     dataElement,
     onTriggerProgramRules,
     onAutoSave,
+    disabled = false,
 }: {
     form: FormInstance<any>;
     dataElement: DataElement | TrackedEntityAttribute;
     onTriggerProgramRules?: () => void;
     onAutoSave?: (dataElementId: string, value: any) => void;
+    disabled?: boolean;
 }) {
     const [years, setYears] = useState<number | null>(null);
     const [months, setMonths] = useState<number | null>(null);
     const [days, setDays] = useState<number | null>(null);
+    const fieldValue = form.getFieldValue(dataElement.id);
+    const dateValue = fieldValue && typeof fieldValue === 'string'
+        ? dayjs(fieldValue)
+        : fieldValue;
 
+    useEffect(() => {
+        if (dateValue && dayjs.isDayjs(dateValue)) {
+            const age = ageFromDob(dateValue);
+            setYears(age.years);
+            setMonths(age.months);
+            setDays(age.days);
+        }
+    }, [dateValue?.format('YYYY-MM-DD')]);
     const handleAgeChange = (
         newYears: number | null,
         newMonths: number | null,
@@ -53,9 +67,10 @@ export default function DobPicker({
             newMonths ?? 0,
             newDays ?? 0,
         );
-        // Store as string immediately
         const dobString = calculatedDob.format('YYYY-MM-DD');
+        console.log("Calculated DOB string:", dobString);
         form.setFieldValue(dataElement.id, dobString);
+        console.log("Form field value after set:", form.getFieldValue(dataElement.id));
         onTriggerProgramRules?.();
         onAutoSave?.(dataElement.id, dobString);
     };
@@ -66,7 +81,6 @@ export default function DobPicker({
             setYears(age.years);
             setMonths(age.months);
             setDays(age.days);
-            // Store as string immediately
             const dobString = date.format('YYYY-MM-DD');
             form.setFieldValue(dataElement.id, dobString);
             onTriggerProgramRules?.();
@@ -81,57 +95,55 @@ export default function DobPicker({
         }
     };
 
-    // Get the field value and convert to dayjs if it's a string
-    const fieldValue = form.getFieldValue(dataElement.id);
-    const dateValue = fieldValue && typeof fieldValue === 'string'
-        ? dayjs(fieldValue)
-        : fieldValue;
-
     return (
-        <DatePicker
-            style={{ width: "100%" }}
-            value={dateValue}
-            onChange={handleDateChange}
-            disabledDate={(d) => d && d.isAfter(dayjs())}
-            renderExtraFooter={() => (
-                <Flex gap={10} vertical style={{ padding: 8 }}>
-                    <Flex gap={5} vertical style={{ width: "100%" }}>
-                        <Text>Years</Text>
-                        <InputNumber
-                            min={0}
-                            placeholder="Years"
-                            value={years ?? undefined}
-                            onChange={(v) => handleAgeChange(v, months, days)}
-                            size="small"
-                            style={{ width: "100%" }}
-                        />
-                    </Flex>
-                    <Flex gap={5} vertical style={{ width: "100%" }}>
-                        <Text>Months</Text>
-                        <InputNumber
-                            min={0}
-                            max={11}
-                            placeholder="Months"
-                            value={months ?? undefined}
-                            onChange={(v) => handleAgeChange(years, v, days)}
-                            size="small"
-                            style={{ width: "100%" }}
-                        />
-                    </Flex>
-                    <Flex gap={5} vertical style={{ width: "100%" }}>
-                        <Text>Days</Text>
-                        <InputNumber
-                            min={0}
-                            max={31}
-                            placeholder="Days"
-                            value={days ?? undefined}
-                            onChange={(v) => handleAgeChange(years, months, v)}
-                            size="small"
-                            style={{ width: "100%" }}
-                        />
-                    </Flex>
+        <Flex vertical gap={8}>
+            <DatePicker
+                style={{ width: "100%" }}
+                value={dateValue}
+                onChange={handleDateChange}
+                disabled={disabled}
+                disabledDate={(d) => d && d.isAfter(dayjs())}
+            />
+            <Flex gap={8} style={{ width: "100%" }} >
+                <Flex gap={5} style={{ flex: 1 }} align="center">
+                    <Text style={{ fontSize: 12 }}>Years</Text>
+                    <InputNumber
+                        min={0}
+                        placeholder="Years"
+                        value={years ?? undefined}
+                        onChange={(v) => handleAgeChange(v, months, days)}
+                        disabled={disabled}
+                        size="small"
+                        style={{ width: "100%", flex: 1 }}
+                    />
                 </Flex>
-            )}
-        />
+                <Flex gap={5} style={{ flex: 1 }} align="center">
+                    <Text style={{ fontSize: 12 }}>Months</Text>
+                    <InputNumber
+                        min={0}
+                        max={11}
+                        placeholder="Months"
+                        value={months ?? undefined}
+                        onChange={(v) => handleAgeChange(years, v, days)}
+                        disabled={disabled}
+                        size="small"
+                        style={{ width: "100%", flex: 1 }}
+                    />
+                </Flex>
+                <Flex gap={5} style={{ flex: 1 }} align="center">
+                    <Text style={{ fontSize: 12 }}>Days</Text>
+                    <InputNumber
+                        min={0}
+                        max={31}
+                        placeholder="Days"
+                        value={days ?? undefined}
+                        onChange={(v) => handleAgeChange(years, months, v)}
+                        disabled={disabled}
+                        size="small"
+                        style={{ width: "100%", flex: 1 }}
+                    />
+                </Flex>
+            </Flex>
+        </Flex>
     );
 }

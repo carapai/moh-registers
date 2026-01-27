@@ -3,16 +3,15 @@ import {
     DashboardOutlined,
     MoreOutlined,
     ScheduleOutlined,
-    SearchOutlined,
     UserOutlined,
 } from "@ant-design/icons";
 import {
     Button,
     Card,
     Col,
-    Divider,
     Dropdown,
-    Input,
+    Flex,
+    Form,
     Layout,
     MenuProps,
     Row,
@@ -22,22 +21,25 @@ import {
     Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import React, { useState } from "react";
+import React from "react";
+import { FlattenedTrackedEntity } from "../db";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
-import { flattenTrackedEntityResponse } from "../utils/utils";
+import { TrackedEntitiesRoute } from "../routes/tracked-entities";
+import { DataElementField } from "./data-element-field";
 import NoPatientsCard from "./no-patient-card";
 import { TrackerRegistration } from "./tracker-registration";
-import { TrackedEntitiesRoute } from "../routes/tracked-entities";
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
 
 const MedicalRegistry: React.FC = () => {
-    const { program, trackedEntityAttributes } = RootRoute.useLoaderData();
+    const [form] = Form.useForm();
+
+    const { program, trackedEntityAttributes, optionSets } =
+        RootRoute.useLoaderData();
     const { total, enrollments, appointments } =
         TrackedEntitiesRoute.useLoaderData();
-    const [search, setSearch] = useState<Record<string, any>>({});
     const trackedEntities = TrackerContext.useSelector(
         (state) => state.context.trackedEntities,
     );
@@ -57,9 +59,19 @@ const MedicalRegistry: React.FC = () => {
             },
         ],
     };
-    const columns: ColumnsType<
-        ReturnType<typeof flattenTrackedEntityResponse>[number]
-    > = [
+    const columns: ColumnsType<FlattenedTrackedEntity> = [
+        {
+            displayInList: true,
+            displayFormName: "Registering Facility",
+            name: "Registering Facility",
+            id: "registeringFacility",
+            valueType: "TEXT",
+            optionSetValue: false,
+            generated: false,
+            unique: false,
+            pattern: "",
+            confidential: false,
+        },
         ...program.programTrackedEntityAttributes.map(
             ({ trackedEntityAttribute: { id }, ...rest }) => ({
                 ...rest,
@@ -81,6 +93,19 @@ const MedicalRegistry: React.FC = () => {
     ].flatMap((trackedEntityAttribute) => {
         if (!trackedEntityAttribute.displayInList) {
             return [];
+        }
+
+        if (trackedEntityAttribute.id === "registeringFacility") {
+            return {
+                title:
+                    trackedEntityAttribute.displayFormName ||
+                    trackedEntityAttribute.name,
+                key: trackedEntityAttribute.id,
+                render: (record) => {
+                    console.log("record in registeringFacility column", record);
+                    return record.enrollment?.orgUnitName || "N/A";
+                },
+            };
         }
 
         if (trackedEntityAttribute.id === "actions") {
@@ -113,21 +138,26 @@ const MedicalRegistry: React.FC = () => {
         };
     });
 
-    const handleSearch = () => {
-        trackerActor.send({
-            type: "SEARCH",
-            search: {
-                filters: search,
-            },
-        });
-    };
-
     const handleClear = () => {
-        setSearch({});
+        form.resetFields();
         trackerActor.send({
             type: "SEARCH",
             search: {
                 filters: {},
+            },
+        });
+    };
+
+    const onStageSubmit = (values: any) => {
+        trackerActor.send({
+            type: "SEARCH",
+            search: {
+                filters: Object.entries(values).reduce((acc, [key, value]) => {
+                    if (value !== undefined && value !== null && value !== "") {
+                        acc[key] = [value];
+                    }
+                    return acc;
+                }, {}),
             },
         });
     };
@@ -145,77 +175,63 @@ const MedicalRegistry: React.FC = () => {
                         variant="borderless"
                         style={{ height: "100%" }}
                     >
-                        <Space
-                            orientation="vertical"
-                            size="middle"
-                            style={{ width: "100%" }}
+                        <Form
+                            form={form}
+                            layout="vertical"
+                            onFinish={onStageSubmit}
+                            style={{ margin: 0, padding: 0 }}
                         >
-                            <div>
-                                <Text type="secondary">
-                                    Use an identifier when possible.
-                                    <br />
-                                    Name-based searches may return multiple
-                                    matches.
-                                </Text>
-                            </div>
-                            <Divider />
-                            {program.programTrackedEntityAttributes
-                                .map(
+                            <Row gutter={[0, 0]}>
+                                {program.programTrackedEntityAttributes.flatMap(
                                     ({
                                         trackedEntityAttribute: { id },
-                                        ...rest
-                                    }) => ({
-                                        ...rest,
-                                        ...trackedEntityAttributes.get(id)!,
-                                    }),
-                                )
-                                .flatMap(
-                                    ({
                                         searchable,
-                                        displayFormName,
-                                        name,
-                                        id,
                                     }) => {
                                         if (!searchable) {
-                                            return null;
+                                            return [];
                                         }
+                                        const current =
+                                            trackedEntityAttributes.get(id)!;
+
+                                        const optionSet =
+                                            current.optionSet?.id ?? "";
+
+                                        const finalOptions =
+                                            optionSets.get(optionSet) ?? [];
+
                                         return (
-                                            <div key={id}>
-                                                <Text strong>
-                                                    {displayFormName || name}
-                                                </Text>
-                                                <Input
-                                                    placeholder={
-                                                        displayFormName || name
-                                                    }
-                                                    value={
-                                                        search[id]?.[0] || ""
-                                                    }
-                                                    onChange={(e) =>
-                                                        setSearch((prev) => ({
-                                                            ...prev,
-                                                            [id]: [
-                                                                e.target.value,
-                                                            ],
-                                                        }))
-                                                    }
-                                                    style={{ marginTop: 8 }}
-                                                />
-                                            </div>
+                                            <DataElementField
+                                                key={id}
+                                                dataElement={current}
+                                                hidden={false}
+                                                finalOptions={finalOptions}
+                                                messages={[]}
+                                                warnings={[]}
+                                                errors={[]}
+                                                required={false}
+                                                span={24}
+                                                form={form}
+                                                onTriggerProgramRules={() => {}}
+                                                onAutoSave={() => {}}
+                                            />
                                         );
                                     },
                                 )}
-                            <Space style={{ width: "100%", marginTop: 16 }}>
-                                <Button
-                                    type="primary"
-                                    icon={<SearchOutlined />}
-                                    onClick={handleSearch}
-                                >
-                                    Search
-                                </Button>
-                                <Button onClick={handleClear}>Clear</Button>
-                            </Space>
-                        </Space>
+                                <Col span={24}>
+                                    <Flex align="center" gap={20}>
+                                        <Button
+                                            type="primary"
+                                            htmlType="submit"
+                                        >
+                                            Search
+                                        </Button>
+                                        <Button onClick={handleClear}>
+                                            Clear
+                                        </Button>
+                                    </Flex>
+                                </Col>
+                            </Row>
+                        </Form>
                     </Card>
                 </Col>
                 <Col xs={24} lg={16}>
@@ -265,14 +281,14 @@ const MedicalRegistry: React.FC = () => {
                             variant="borderless"
                             extra={
                                 <Space>
-                                    <TrackerRegistration />
                                     <Text>
                                         {`${trackedEntities.length} results matching: '${Object.values(
-                                            search,
+                                            form.getFieldsValue(),
                                         )
-                                            .flat()
+                                            .flatMap((v) => (v ? [v] : []))
                                             .join(", ")}'`}
                                     </Text>
+                                    <TrackerRegistration />
                                 </Space>
                             }
                         >

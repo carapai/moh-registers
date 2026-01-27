@@ -1,29 +1,38 @@
 import {
-	CheckCircleOutlined,
-	ExclamationCircleOutlined,
-	ExperimentOutlined,
-	EyeOutlined,
-	PlusOutlined
+    CheckCircleOutlined,
+    ExclamationCircleOutlined,
+    ExperimentOutlined,
+    EyeOutlined,
+    PlusOutlined,
 } from "@ant-design/icons";
 import {
-	Button,
-	Flex,
-	Form,
-	message,
-	Modal,
-	Row,
-	Table,
-	TableProps,
-	Typography,
+    Button,
+    Flex,
+    Form,
+    message,
+    Modal,
+    Row,
+    Table,
+    TableProps,
+    Typography,
 } from "antd";
 import dayjs from "dayjs";
+import { useLiveQuery } from "dexie-react-hooks";
 import { singular } from "pluralize";
 import React, { useCallback, useEffect, useState } from "react";
-import { useEventAutoSave } from "../hooks/useEventAutoSave";
+import { db } from "../db";
+import { useDexieEventForm } from "../hooks/useDexieEventForm";
+import { useEventSyncStatus } from "../hooks/useEntitySyncStatus";
+import { useEventValidation } from "../hooks/useEventValidation";
+import { useProgramRulesWithDexie } from "../hooks/useProgramRules";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
 import { ProgramStage } from "../schemas";
-import { createEmptyEvent, flattenTrackedEntity } from "../utils/utils";
+import {
+    calculateColSpan,
+    createEmptyEvent,
+    flattenTrackedEntity,
+} from "../utils/utils";
 import { DataElementField } from "./data-element-field";
 
 const { Text } = Typography;
@@ -38,6 +47,7 @@ export const ProgramStageCapture: React.FC<{
         optionSets,
         programRuleVariables,
         programRules,
+        program,
     } = RootRoute.useLoaderData();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState(0);
@@ -64,37 +74,62 @@ export const ProgramStageCapture: React.FC<{
     );
     const trackerActor = TrackerContext.useActorRef();
 
-    const currentEvent = TrackerContext.useSelector(
-        (state) => state.context.currentEvent,
+    const currentEventId = TrackerContext.useSelector(
+        (state) => state.context.currentEvent?.event || null,
     );
     const mainEvent = TrackerContext.useSelector(
         (state) => state.context.mainEvent,
-    );
-
-    const ruleResult = TrackerContext.useSelector(
-        (state) => state.context.currentEventRuleResults,
     );
 
     const trackedEntity = TrackerContext.useSelector(
         (state) => state.context.trackedEntity,
     );
 
-    // Initialize auto-save hook
-    const { triggerAutoSave, savingState, errorMessage, isEventCreated } =
-        useEventAutoSave({
-            form: stageForm,
-            event: currentEvent,
-            trackerActor,
-            ruleResult: ruleResult,
-            onEventCreated: (newEventId) => {
-                trackerActor.send({
-                    type: "UPDATE_EVENT_ID",
-                    oldId: currentEvent.event,
-                    newId: newEventId,
-                });
-                setModalKey(Number(newEventId) || 0);
-            },
-        });
+    const currentEventFromState = TrackerContext.useSelector(
+        (state) => state.context.currentEvent,
+    );
+
+    // Use Dexie hook for event data management
+    const {
+        event: currentEvent,
+        updateDataValue,
+        updateDataValues,
+        markEventReady,
+    } = useDexieEventForm({ currentEvent: currentEventFromState! });
+
+    // Use Dexie-integrated program rules
+    const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
+        form: stageForm,
+        programRules,
+        programRuleVariables,
+        programStage: programStage.id,
+        trackedEntityAttributes: trackedEntity.attributes,
+        enrollment: trackedEntity.enrollment,
+        onAssignments: updateDataValues,
+        applyAssignmentsToForm: true,
+        persistAssignments: false, // Don't auto-persist during typing
+        clearHiddenFields: true, // Automatically clear hidden fields
+        program: program.id,
+        debounceMs: 300,
+    });
+
+    // Validate event for required fields
+    const { isValid, readyToCreate } = useEventValidation({
+        programStage: programStage,
+        dataValues: currentEvent?.dataValues || {},
+        occurredAt: currentEvent?.occurredAt,
+    });
+
+    // Auto-mark event as ready when validation passes
+    useEffect(() => {
+        if (readyToCreate && currentEvent?.syncStatus === "draft") {
+            markEventReady();
+        }
+    }, [readyToCreate, currentEvent?.syncStatus, markEventReady]);
+
+    // Get sync status for current event
+    const { syncStatus, isPending, isSyncing, hasFailed, syncError } =
+        useEventSyncStatus(currentEventId);
 
     const currentDataElements = new Map(
         programStage.programStageDataElements.map((psde) => [
@@ -108,13 +143,25 @@ export const ProgramStageCapture: React.FC<{
         ]),
     );
 
-    const events = TrackerContext.useSelector((state) =>
-        state.context.trackedEntity?.events.filter(
-            (e) =>
-                e.programStage === programStage.id &&
-                e.occurredAt === mainEvent.occurredAt,
-        ),
-    );
+    // Load events from Dexie reactively
+    const events =
+        useLiveQuery(async () => {
+            if (!trackedEntity.trackedEntity || !mainEvent.occurredAt)
+                return [];
+            return await db.events
+                .where("trackedEntity")
+                .equals(trackedEntity.trackedEntity)
+                .and(
+                    (e) =>
+                        e.programStage === programStage.id &&
+                        e.occurredAt === mainEvent.occurredAt,
+                )
+                .toArray();
+        }, [
+            trackedEntity.trackedEntity,
+            programStage.id,
+            mainEvent.occurredAt,
+        ]) || [];
 
     const showVisitModal = (
         visit: ReturnType<typeof flattenTrackedEntity>["events"][number],
@@ -181,91 +228,40 @@ export const ProgramStageCapture: React.FC<{
     ];
 
     const handleTriggerProgramRules = useCallback(() => {
-        const allValues = stageForm.getFieldsValue();
-        trackerActor.send({
-            type: "EXECUTE_PROGRAM_RULES",
-            dataValues: allValues,
-            attributeValues: trackedEntity.attributes,
-            programStage: programStage.id,
-            programRules,
-            programRuleVariables,
-            enrollment: trackedEntity.enrollment,
-            ruleResultKey: "currentEventRuleResults",
-            ruleResultUpdateKey: "currentEvent",
-            updateKey: "dataValues",
-        });
-    }, [
-        trackedEntity.attributes,
-        stageForm,
-        programStage.id,
-        programRules,
-        programRuleVariables,
-        trackerActor,
-    ]);
+        // Execute program rules with current form values
+        executeAndApplyRules();
+    }, [executeAndApplyRules]);
 
     useEffect(() => {
-        if (isVisitModalOpen) {
+        if (isVisitModalOpen && currentEvent) {
             stageForm.resetFields();
             if (
                 currentEvent.dataValues &&
                 Object.keys(currentEvent.dataValues).length > 0
             ) {
-                trackerActor.send({
-                    type: "EXECUTE_PROGRAM_RULES",
-                    dataValues: currentEvent.dataValues,
-                    attributeValues: trackedEntity.attributes,
-                    programStage: programStage.id,
-                    programRules,
-                    programRuleVariables,
-                    enrollment: trackedEntity.enrollment,
-                    ruleResultKey: "currentEventRuleResults",
-                    ruleResultUpdateKey: "currentEvent",
-                    updateKey: "dataValues",
-                });
+                // Initialize form with data from Dexie (one-time sync)
+                stageForm.setFieldsValue(currentEvent.dataValues);
+                console.log("📝 Form initialized with event dataValues");
+
+                // Execute program rules with current event data
+                executeAndApplyRules(currentEvent.dataValues);
             } else {
                 console.log("✨ Creating new stage event with empty form");
             }
         }
-    }, [isVisitModalOpen, currentEvent.event, trackerActor, stageForm]);
-
-    useEffect(() => {
-        if (
-            isVisitModalOpen &&
-            Object.keys(ruleResult.assignments).length > 0
-        ) {
-            stageForm.setFieldsValue(ruleResult.assignments);
-
-            // Trigger auto-save for program rule assignments if event already created
-            // Only save assignments that belong to this stage
-            if (isEventCreated) {
-                const stageDataElementIds = new Set(
-                    programStage.programStageDataElements.map(
-                        (psde) => psde.dataElement.id,
-                    ),
-                );
-
-                Object.entries(ruleResult.assignments).forEach(
-                    ([key, value]) => {
-                        // Only trigger auto-save if this data element belongs to current stage
-                        if (stageDataElementIds.has(key)) {
-                            triggerAutoSave(key, value);
-                        }
-                    },
-                );
-            }
-        }
     }, [
-        ruleResult.assignments,
         isVisitModalOpen,
+        currentEvent?.event,
+        executeAndApplyRules,
         stageForm,
-        isEventCreated,
-        triggerAutoSave,
-        programStage.programStageDataElements,
     ]);
+
+    // Program rule assignments are now automatically handled by useProgramRulesWithDexie
+    // with persistAssignments: true, so no manual save needed
 
     const [shouldCreateAgain, setShouldCreateAgain] = useState(false);
 
-    const onStageSubmit = (values: Record<string, any>) => {
+    const onStageSubmit = async (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
             console.error(
                 "Form has validation errors from program rules:",
@@ -282,17 +278,9 @@ export const ProgramStageCapture: React.FC<{
                 ...values,
                 ...ruleResult.assignments,
             };
-            const event: ReturnType<
-                typeof flattenTrackedEntity
-            >["events"][number] = {
-                ...currentEvent,
-                occurredAt: mainEvent.occurredAt,
-                dataValues: { ...currentEvent.dataValues, ...finalValues },
-            };
-            trackerActor.send({
-                type: "CREATE_OR_UPDATE_EVENT",
-                event,
-            });
+
+            // Update event data in Dexie (automatic sync)
+            await updateDataValues(finalValues);
 
             // Check if we should create another record
             if (shouldCreateAgain) {
@@ -436,10 +424,10 @@ export const ProgramStageCapture: React.FC<{
                         style={{ padding: "8px 0" }}
                     >
                         <Flex>
-														&nbsp;&nbsp;
-                            {savingState !== "idle" && (
+                            &nbsp;&nbsp;
+                            {syncStatus && syncStatus !== "draft" && (
                                 <Flex align="center" gap="small">
-                                    {savingState === "saved" && (
+                                    {syncStatus === "synced" && (
                                         <>
                                             <CheckCircleOutlined
                                                 style={{ color: "#52c41a" }}
@@ -448,11 +436,41 @@ export const ProgramStageCapture: React.FC<{
                                                 type="success"
                                                 style={{ fontSize: 12 }}
                                             >
-                                                Saved
+                                                Synced
                                             </Text>
                                         </>
                                     )}
-                                    {savingState === "error" && (
+                                    {syncStatus === "pending" && (
+                                        <>
+                                            <CheckCircleOutlined
+                                                style={{ color: "#1890ff" }}
+                                            />
+                                            <Text
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: "#1890ff",
+                                                }}
+                                            >
+                                                Saved (pending sync)
+                                            </Text>
+                                        </>
+                                    )}
+                                    {syncStatus === "syncing" && (
+                                        <>
+                                            <CheckCircleOutlined
+                                                style={{ color: "#1890ff" }}
+                                            />
+                                            <Text
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: "#1890ff",
+                                                }}
+                                            >
+                                                Syncing...
+                                            </Text>
+                                        </>
+                                    )}
+                                    {syncStatus === "failed" && (
                                         <>
                                             <ExclamationCircleOutlined
                                                 style={{ color: "#faad14" }}
@@ -461,7 +479,7 @@ export const ProgramStageCapture: React.FC<{
                                                 type="warning"
                                                 style={{ fontSize: 12 }}
                                             >
-                                                {errorMessage}
+                                                {syncError || "Sync failed"}
                                             </Text>
                                         </>
                                     )}
@@ -530,7 +548,7 @@ export const ProgramStageCapture: React.FC<{
                     layout="vertical"
                     onFinish={onStageSubmit}
                     style={{ margin: 0, padding: 0 }}
-                    initialValues={currentEvent.dataValues}
+                    initialValues={currentEvent?.dataValues}
                 >
                     <Flex vertical>
                         {programStage.programStageSections.flatMap(
@@ -539,28 +557,25 @@ export const ProgramStageCapture: React.FC<{
                                     return [];
 
                                 return (
-                                    <Row gutter={[24, 16]} key={section.id}>
+                                    <Row gutter={[16, 0]} key={section.id}>
                                         {section.dataElements.flatMap(
                                             (dataElement) => {
-                                                const {
-                                                    vertical = false,
-                                                    renderOptionsAsRadio = false,
-                                                } =
-                                                    programStageDataElements.get(
+                                                if (
+                                                    ruleResult.hiddenFields.has(
                                                         dataElement.id,
-                                                    ) ?? {};
+                                                    ) &&
+                                                    ruleResult
+                                                        .shownOptionGroups[
+                                                        dataElement.id
+                                                    ] === undefined
+                                                ) {
+                                                    return [];
+                                                }
 
                                                 const currentDataElement =
                                                     dataElements.get(
                                                         dataElement.id,
                                                     );
-                                                if (
-                                                    ruleResult.hiddenFields.has(
-                                                        dataElement.id,
-                                                    )
-                                                ) {
-                                                    return [];
-                                                }
 
                                                 const optionSet =
                                                     currentDataElement
@@ -652,17 +667,26 @@ export const ProgramStageCapture: React.FC<{
                                                         desktopRenderType={
                                                             desktopRenderType
                                                         }
+                                                        span={calculateColSpan(
+                                                            section.dataElements
+                                                                .length,
+                                                            6,
+                                                        )}
                                                         messages={messages}
                                                         warnings={warnings}
                                                         errors={errors}
                                                         required={compulsory}
+                                                        disabled={
+                                                            dataElement.id in
+                                                            ruleResult.assignments
+                                                        }
                                                         key={`${section.id}${dataElement.id}`}
                                                         form={stageForm}
                                                         onTriggerProgramRules={
                                                             handleTriggerProgramRules
                                                         }
                                                         onAutoSave={
-                                                            triggerAutoSave
+                                                            updateDataValue
                                                         }
                                                     />
                                                 );

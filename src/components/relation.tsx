@@ -1,10 +1,13 @@
 import { Form, Row } from "antd";
+import { useLiveQuery } from "dexie-react-hooks";
 import React, { useCallback, useEffect } from "react";
-import { useEventAutoSave } from "../hooks/useEventAutoSave";
+import { db } from "../db";
+import { useDexieEventForm } from "../hooks/useDexieEventForm";
+import { useProgramRulesWithDexie } from "../hooks/useProgramRules";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
 import { BasicTrackedEntity } from "../schemas";
-import { generateUid } from "../utils/id";
+import { calculateColSpan } from "../utils/utils";
 import { DataElementField } from "./data-element-field";
 
 export default function Relation({
@@ -24,11 +27,14 @@ export default function Relation({
     } = RootRoute.useLoaderData();
 
     const [childEventForm] = Form.useForm();
-    const trackerActor = TrackerContext.useActorRef();
-    const mainEvent = TrackerContext.useSelector(
-        (state) => state.context.mainEvent,
+    const mainEventId = TrackerContext.useSelector(
+        (state) => state.context.mainEvent?.event || null,
     );
-    const occurredAt = mainEvent.occurredAt;
+    const mainEvent = useLiveQuery(
+        async () => (mainEventId ? await db.events.get(mainEventId) : null),
+        [mainEventId],
+    );
+    const occurredAt = mainEvent?.occurredAt;
 
     const [stage] = program.programStages.filter(
         ({ id }) => id === "K2nxbE9ubSs",
@@ -38,28 +44,33 @@ export default function Relation({
         ({ name }) => name === "Child Health Services",
     );
 
-    const ruleResult = TrackerContext.useSelector(
-        (state) => state.context.childEventRuleResults,
-    );
-
     const childEvent = TrackerContext.useSelector(
         (state) => state.context.childEvent,
     );
 
-    const { triggerAutoSave, savingState, errorMessage, isEventCreated } =
-        useEventAutoSave({
-            form: childEventForm,
-            event: childEvent,
-            trackerActor,
-            ruleResult: ruleResult,
-            onEventCreated: (newEventId) => {
-                trackerActor.send({
-                    type: "UPDATE_EVENT_ID",
-                    oldId: childEvent.event,
-                    newId: newEventId,
-                });
+    const { updateDataValue, updateDataValues } = useDexieEventForm({
+        currentEvent: childEvent,
+    });
+
+    const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
+        form: childEventForm,
+        programRules,
+        programRuleVariables,
+        programStage: childEvent?.programStage || "K2nxbE9ubSs",
+        trackedEntityAttributes: child.attributes.reduce(
+            (acc, attr) => {
+                acc[attr.attribute] = attr.value;
+                return acc;
             },
-        });
+            {} as Record<string, any>,
+        ),
+        enrollment: child.enrollments[0],
+        onAssignments: updateDataValues,
+        applyAssignmentsToForm: true,
+        persistAssignments: true,
+        program: program.id,
+    });
+
     const currentDataElements = new Map(
         stage.programStageDataElements.map((psde) => [
             psde.dataElement.id,
@@ -72,120 +83,30 @@ export default function Relation({
         ]),
     );
     const handleTriggerProgramRules = useCallback(() => {
-        const allValues = childEventForm.getFieldsValue();
-        trackerActor.send({
-            type: "EXECUTE_PROGRAM_RULES",
-            dataValues: allValues,
-            programRules,
-            programRuleVariables,
-            programStage: childEvent.programStage,
-            attributeValues: child.attributes.reduce((acc, attr) => {
-                acc[attr.attribute] = attr.value;
-                return acc;
-            }, {}),
-            ruleResultKey: "childEventRuleResults",
-            enrollment: child.enrollments[0],
-            ruleResultUpdateKey: "childEvent",
-            updateKey: "dataValues",
-        });
-    }, [
-        childEventForm,
-        trackerActor,
-        programRules,
-        programRuleVariables,
-        childEvent.programStage,
-        child,
-    ]);
+        executeAndApplyRules();
+    }, [executeAndApplyRules]);
 
     useEffect(() => {
-        // Safety check: ensure child has enrollments
         if (!child.enrollments || child.enrollments.length === 0) {
-            console.warn("⚠️ Child has no enrollments:", child);
             return;
         }
+        if (!childEvent || !mainEvent) return;
 
-        // Create relationship between main event and child event (if child event is being created for the first time)
-        const relationship = childEvent.event.startsWith("temp")
-            ? {
-                  relationship: generateUid(),
-                  relationshipType: "B1XX9INzieq", // Event-to-Event relationship type
-                  from: {
-                      event: {
-                          event: mainEvent.event, // Main/parent event ID
-                      },
-                  },
-                  to: {
-                      event: {
-                          event: childEvent.event, // Child event ID
-                      },
-                  },
-              }
-            : undefined;
-
-        trackerActor.send({
-            type: "SET_CHILD_EVENT",
-            childEvent: {
-                ...childEvent,
-                dataValues: {
-                    ...childEvent.dataValues,
-                    UuxHHVp5CnF:
-                        section === "Maternity" ? "Newborn" : "Postnatal",
-
-                    mrKZWf2WMIC: "Child Health Services",
-                    occurredAt,
-                },
-                trackedEntity: child.trackedEntity,
-                enrollment: child.enrollments[0].enrollment,
-                program: child.enrollments[0].program,
-                orgUnit: child.enrollments[0].orgUnit,
-                relationships: relationship ? [relationship] : childEvent.relationships || [],
-            },
-        });
-        trackerActor.send({
-            type: "EXECUTE_PROGRAM_RULES",
-            programRules: programRules,
-            programRuleVariables: programRuleVariables,
-            programStage: childEvent.programStage,
-            dataValues: {
+        const initializeChildEvent = async () => {
+            const initialDataValues = {
                 ...childEvent.dataValues,
                 UuxHHVp5CnF: section === "Maternity" ? "Newborn" : "Postnatal",
                 mrKZWf2WMIC: "Child Health Services",
-								occurredAt,
-            },
-            attributeValues: child.attributes.reduce((acc, attr) => {
-                acc[attr.attribute] = attr.value;
-                return acc;
-            }, {}),
-            ruleResultKey: "childEventRuleResults",
-            enrollment: child.enrollments[0],
-            ruleResultUpdateKey: "childEvent",
-            updateKey: "dataValues",
-        });
-    }, [childEvent.event, section]);
+                occurredAt,
+            };
 
-    useEffect(() => {
-        if (Object.keys(ruleResult.assignments).length > 0) {
-            childEventForm.setFieldsValue(ruleResult.assignments);
-            const stageDataElementIds = new Set(
-                stage.programStageDataElements.map(
-                    (psde) => psde.dataElement.id,
-                ),
-            );
-            Object.entries(ruleResult.assignments).forEach(([key, value]) => {
-                if (stageDataElementIds.has(key)) {
-                    triggerAutoSave(key, value);
-                }
-            });
-        }
-    }, [
-        ruleResult,
-        childEventForm,
-        isEventCreated,
-        triggerAutoSave,
-        stage.programStageDataElements,
-        childEvent,
-        child,
-    ]);
+            await updateDataValues(initialDataValues);
+
+            executeAndApplyRules(initialDataValues);
+        };
+
+        initializeChildEvent();
+    }, [childEvent?.event, section]);
 
     return (
         <Form
@@ -194,7 +115,7 @@ export default function Relation({
             // onFinish={onVisitSubmit}
             style={{ margin: 0, padding: 0 }}
             initialValues={{
-                ...childEvent.dataValues,
+                ...childEvent?.dataValues,
                 occurredAt,
                 UuxHHVp5CnF: section === "Maternity" ? "Newborn" : "Postnatal",
                 mrKZWf2WMIC: "Child Health Services",
@@ -265,7 +186,11 @@ export default function Relation({
                             key={dataElement.id}
                             form={childEventForm}
                             onTriggerProgramRules={handleTriggerProgramRules}
-                            onAutoSave={triggerAutoSave}
+                            onAutoSave={updateDataValue}
+                            span={calculateColSpan(
+                                currentSection.dataElements.length,
+                                6,
+                            )}
                         />
                     );
                 })}

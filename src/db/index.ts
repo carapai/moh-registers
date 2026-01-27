@@ -4,6 +4,7 @@ import {
     Node,
     Program,
     ProgramRule,
+    ProgramRuleResult,
     ProgramRuleVariable,
     RelationshipType,
     TrackedEntityAttribute,
@@ -30,6 +31,25 @@ export type FlattenedTrackedEntities = ReturnType<
 export type FlattenedEvent = FlattenedTrackedEntity["events"][number];
 export type FlattenedRelationship =
     FlattenedTrackedEntity["relationships"][number];
+
+// Sync status for entities and events
+export type SyncStatus = "draft" | "pending" | "syncing" | "synced" | "failed";
+
+// Enhanced types with sync metadata
+// export interface SyncMetadata {
+//     syncStatus?: SyncStatus;
+//     version?: number; // For optimistic locking
+//     lastModified?: string;
+//     lastSynced?: string;
+//     syncError?: string;
+//     createdAtClient?: string; // DHIS2 required field
+//     updatedAtClient?: string; // DHIS2 required field
+// }
+
+// Database types with sync metadata
+// export type TrackedEntityWithSync = FlattenedTrackedEntity & SyncMetadata;
+// export type EventWithSync = FlattenedEvent & SyncMetadata;
+// export type RelationshipWithSync = FlattenedRelationship & SyncMetadata;
 
 // Sync queue for offline operations
 export interface SyncOperation {
@@ -67,11 +87,38 @@ export interface Village {
     District: string;
 }
 
+// Program rules cache entry
+export interface RuleCacheEntry {
+    key: string;
+    result: ProgramRuleResult;
+    timestamp: number;
+    dataValues: Record<string, any>;
+    attributes: Record<string, any>;
+}
+
+// Metadata version tracking with per-type lastUpdated timestamps
+export interface MetadataVersion {
+    id: string; // Always "metadata-version"
+    lastSync: string; // Overall last sync timestamp (ISO 8601)
+    versions: {
+        // Per-type lastUpdated timestamps for incremental sync
+        programs?: string; // ISO 8601 timestamp
+        dataElements?: string; // ISO 8601 timestamp
+        attributes?: string; // ISO 8601 timestamp
+        programRules?: string; // ISO 8601 timestamp
+        programRuleVariables?: string; // ISO 8601 timestamp
+        optionSets?: string; // ISO 8601 timestamp
+        optionGroups?: string; // ISO 8601 timestamp
+        villages?: string; // ISO 8601 timestamp
+        relationshipTypes?: string; // ISO 8601 timestamp
+    };
+}
+
 /**
  * RegisterDatabase - Main Dexie database instance
  */
 export class RegisterDatabase extends Dexie {
-    // Tables
+    // Tables with sync metadata
     trackedEntities!: Table<FlattenedTrackedEntity, string>;
     events!: Table<FlattenedEvent, string>;
     relationships!: Table<FlattenedRelationship, string>;
@@ -96,62 +143,53 @@ export class RegisterDatabase extends Dexie {
     programs!: Table<Program, string>;
     villages!: Table<Village, string>;
     relationshipTypes: Table<RelationshipType>;
+    ruleCache!: Table<RuleCacheEntry, string>;
+    metadataVersions!: Table<MetadataVersion, string>;
 
     constructor() {
         super("MOHRegisterDB");
 
-        this.version(2).stores({
-            // TrackedEntities table
-            // Primary key: trackedEntity
-            // Indexed fields: orgUnit, updatedAt (for querying and sorting)
+        // Version 7 - Added lastSynced field for tracking successful sync timestamps
+        this.version(1).stores({
+            // Tracked entities with sync status, version tracking, and lastSynced
             trackedEntities:
-                "trackedEntity,orgUnit,enrollment.enrolledAt,updatedAt",
+                "trackedEntity,orgUnit,enrollment.enrolledAt,updatedAt,syncStatus,version,lastModified,lastSynced",
 
-            // Events table
-            // Primary key: event
-            // Indexed fields: trackedEntity,programStage,occurredAt
-            events: "event,trackedEntity,programStage,enrollment,occurredAt,updatedAt",
+            // Events with sync status, version tracking, and lastSynced
+            events: "event,trackedEntity,programStage,enrollment,occurredAt,updatedAt,syncStatus,version,lastModified,lastSynced",
 
-            // Relationship table
-            // Primary key: relationship
-            // Indexed fields: from.trackedEntity.trackedEntity, from.event.event (for querying relationships by source)
-            relationships: "relationship,from.trackedEntity.trackedEntity,from.event.event",
+            // Relationships with sync status, version tracking, and lastSynced
+            relationships:
+                "relationship,from.trackedEntity.trackedEntity,from.event.event,syncStatus,version,lastModified,lastSynced",
+
+            // Relationship types
             relationshipTypes: "id",
 
-            // TrackedEntity drafts table
-            // Primary key: id
-            // Indexed fields: updatedAt (for cleanup and listing)
+            // Draft tables
             trackedEntityDrafts: "trackedEntity,orgUnit,updatedAt,isNew",
-
-            // Event drafts table
-            // Primary key: id
-            // Indexed fields: trackedEntity,programStage,updatedAt
             eventDrafts: "event,trackedEntity,programStage,updatedAt,isNew",
 
-            // Sync queue table
-            // Primary key: id
-            // Indexed fields: status,priority,createdAt (for queue processing)
+            // Sync queue
             syncQueue: "id,status,priority,type,entityId,createdAt",
 
-            // Machine state table
-            // Primary key: id (always "tracker-machine")
+            // Machine state persistence
             machineState: "id,updatedAt",
-            // Program Rules table
-            programRules: "id,program",
 
+            // Metadata tables
+            programRules: "id,program",
             programRuleVariables: "id,program",
-            // Options table
             dataElements: "id,name",
-            // Attributes table
             trackedEntityAttributes: "id,name",
             organisationUnits: "[id+user],id,title,user",
             optionSets: "[id+optionSet],id,optionSet,name,code",
             optionGroups: "[id+optionGroup],id,optionGroup,name,code",
             programs: "id,name,programType",
-            // Villages table with compound indexes for hierarchical queries
-            // Allows fast filtering: District -> Subcounty -> Parish -> Village
             villages:
                 "village_id,village_name,District,[District+subcounty_name],[District+subcounty_name+parish_name]",
+            // Program rules cache
+            ruleCache: "key,timestamp",
+            // Metadata version tracking
+            metadataVersions: "id,lastSync",
         });
     }
 
@@ -233,6 +271,92 @@ export class RegisterDatabase extends Dexie {
 
         return { trackedEntityDrafts, eventDrafts };
     }
+
+    /**
+     * Get entities with specific sync status
+     */
+    async getEntitiesByStatus(
+        status: SyncStatus,
+    ): Promise<FlattenedTrackedEntity[]> {
+        return await this.trackedEntities
+            .where("syncStatus")
+            .equals(status)
+            .toArray();
+    }
+
+    /**
+     * Get events with specific sync status
+     */
+    async getEventsByStatus(status: SyncStatus): Promise<FlattenedEvent[]> {
+        return await this.events.where("syncStatus").equals(status).toArray();
+    }
+
+    /**
+     * Get relationships with specific sync status
+     */
+    async getRelationshipsByStatus(
+        status: SyncStatus,
+    ): Promise<FlattenedRelationship[]> {
+        return await this.relationships
+            .where("syncStatus")
+            .equals(status)
+            .toArray();
+    }
+
+    /**
+     * Get count of items pending sync across all tables
+     */
+    async getPendingChangesCount(): Promise<{
+        entities: number;
+        events: number;
+        relationships: number;
+        total: number;
+    }> {
+        const entities = await this.trackedEntities
+            .where("syncStatus")
+            .anyOf(["draft", "pending", "failed"])
+            .count();
+
+        const events = await this.events
+            .where("syncStatus")
+            .anyOf(["draft", "pending", "failed"])
+            .count();
+
+        const relationships = await this.relationships
+            .where("syncStatus")
+            .anyOf(["draft", "pending", "failed"])
+            .count();
+
+        return {
+            entities,
+            events,
+            relationships,
+            total: entities + events + relationships,
+        };
+    }
+
+    // /**
+    //  * Initialize sync metadata for new entity
+    //  */
+    // createSyncMetadata(status: SyncStatus = "draft"): SyncMetadata {
+    //     return {
+    //         syncStatus: status,
+    //         version: 1,
+    //         lastModified: new Date().toISOString(),
+    //     };
+    // }
+
+    // /**
+    //  * Update sync metadata (for use in hooks)
+    //  */
+    // updateSyncMetadata(current: Partial<SyncMetadata>): Partial<SyncMetadata> {
+    //     return {
+    //         ...current,
+    //         version: (current.version || 0) + 1,
+    //         lastModified: new Date().toISOString(),
+    //         syncStatus: "pending",
+    //     };
+    // }
 }
 
 // Export singleton database instance

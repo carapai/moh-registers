@@ -9,6 +9,7 @@ import {
     MoreOutlined,
 } from "@ant-design/icons";
 import { Button, Layout, Space, Tooltip, Typography } from "antd";
+import { createMetadataSync } from "../db/metadata-sync";
 
 const { Header } = Layout;
 const { Title, Text } = Typography;
@@ -17,6 +18,7 @@ import { Flex } from "antd";
 import useApp from "antd/es/app/useApp";
 import { groupBy } from "lodash";
 import { DraftRecovery } from "../components/draft-recovery";
+import MetadataSyncComponent from "../components/metadata-sync";
 import { SyncErrorBoundary } from "../components/sync-error-boundary";
 import { SyncStatus } from "../components/sync-status";
 import { db, FlattenedTrackedEntity, Village } from "../db";
@@ -34,6 +36,65 @@ import {
 } from "../schemas";
 
 const queryInfo = async (
+    engine: ReturnType<typeof useDataEngine>,
+) => {
+    // Create metadata sync manager
+    const metadataSync = createMetadataSync(engine);
+
+    // Check if we need to sync metadata
+    const updateInfo = await metadataSync.checkForUpdates();
+
+    if (updateInfo.hasUpdates) {
+        console.log("📡 Syncing metadata...", updateInfo);
+
+        // Perform metadata sync with progress tracking
+        await metadataSync.fullSync((progress) => {
+            console.log(`📊 Metadata sync progress: ${progress.percentage}% - ${progress.current}`);
+        });
+    } else {
+        console.log("✅ Using cached metadata (last sync:", updateInfo.lastSync, ")");
+    }
+
+    // Load metadata from IndexedDB (now always available after sync)
+    const dataElements = await db.dataElements.toArray();
+    const trackedEntityAttributes = await db.trackedEntityAttributes.toArray();
+    const programRules = await db.programRules.toArray();
+    const programRuleVariables = await db.programRuleVariables.toArray();
+    const optionGroups = await db.optionGroups.toArray();
+    const optionSets = await db.optionSets.toArray();
+    const [program] = await db.programs.toArray();
+    const villages = await db.villages.toArray();
+    const [motherChildRelation] = await db.relationshipTypes.toArray();
+
+    // Return formatted metadata
+    return {
+        dataElements: new Map(dataElements.map((de) => [de.id, de])),
+        trackedEntityAttributes: new Map(
+            trackedEntityAttributes.map((ta) => [ta.id, ta]),
+        ),
+        programRules,
+        programRuleVariables,
+        optionGroups: new Map(
+            Object.entries(groupBy(optionGroups, "optionGroup")).map(
+                ([id, og]) => [id, og],
+            ),
+        ),
+        optionSets: new Map(
+            Object.entries(groupBy(optionSets, "optionSet")).map(([id, os]) => [
+                id,
+                os,
+            ]),
+        ),
+        program,
+        villages,
+        programOrgUnits: new Set(program.organisationUnits.map(({ id }) => id)),
+        motherChildRelation,
+    };
+};
+
+// Legacy implementation - kept for reference but not used
+// Can be removed in future cleanup
+const _queryInfoLegacy_UNUSED = async (
     queryClient: QueryClient,
     engine: ReturnType<typeof useDataEngine>,
 ) => {
@@ -80,7 +141,7 @@ const queryInfo = async (
                         resource: "programs",
                         id: "ueBhWkWll5v",
                         params: {
-                            fields: "id,name,programSections[id,name,sortOrder,trackedEntityAttributes[id]],trackedEntityType[id,trackedEntityTypeAttributes[id]],programType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits,programStages[id,repeatable,name,code,programStageDataElements[id,compulsory,renderOptionsAsRadio,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,dataElements[id]]],programTrackedEntityAttributes[id,mandatory,searchable,renderOptionsAsRadio,renderType,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id]]",
+                            fields: "id,name,programSections[id,name,sortOrder,trackedEntityAttributes[id]],trackedEntityType[id,trackedEntityTypeAttributes[id]],programType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits[id,name],programStages[id,repeatable,name,code,programStageDataElements[id,compulsory,renderOptionsAsRadio,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,dataElements[id]]],programTrackedEntityAttributes[id,mandatory,searchable,renderOptionsAsRadio,renderType,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id]]",
                         },
                     },
                     optionSets: {
@@ -251,13 +312,15 @@ export const RootRoute = createRootRouteWithContext<{
     orgUnit: OrgUnit;
 }>()({
     component: RootRouteComponent,
-    loader: async ({ context: { queryClient, engine } }) => {
+    loader: async ({ context: { engine } }) => {
         try {
-            return await queryInfo(queryClient, engine);
+            return await queryInfo(engine);
         } catch (error) {
+            console.error("Error loading metadata:", error);
+            // If metadata loading fails, try resetting the database and retrying
             await db.delete();
-						await db.open();
-            return await queryInfo(queryClient, engine);
+            await db.open();
+            return await queryInfo(engine);
         }
     },
 });
@@ -266,10 +329,12 @@ function LayoutWithDrafts({
     orgUnit,
     draftModalVisible,
     setDraftModalVisible,
+    metadataSync,
 }: {
     orgUnit: OrgUnit;
     draftModalVisible: boolean;
     setDraftModalVisible: (visible: boolean) => void;
+    metadataSync: ReturnType<typeof createMetadataSync>;
 }) {
     const { message } = useApp();
     const navigate = RootRoute.useNavigate();
@@ -371,6 +436,7 @@ function LayoutWithDrafts({
                                 Drafts
                             </Button>
                         </Tooltip>
+                        <MetadataSyncComponent metadataSync={metadataSync} />
                         <SyncStatus />
                     </Space>
                 </Header>
@@ -395,6 +461,8 @@ function RootRouteComponent() {
         manager.startAutoSync(3000);
         return manager;
     }, [engine]);
+
+    const metadataSync = useMemo(() => createMetadataSync(engine), [engine]);
 
     const [draftModalVisible, setDraftModalVisible] = useState(false);
 
@@ -421,6 +489,7 @@ function RootRouteComponent() {
                     orgUnit={orgUnit}
                     draftModalVisible={draftModalVisible}
                     setDraftModalVisible={setDraftModalVisible}
+                    metadataSync={metadataSync}
                 />
             </TrackerContext.Provider>
         </SyncErrorBoundary>

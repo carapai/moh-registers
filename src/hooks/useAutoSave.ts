@@ -6,7 +6,7 @@ import {
     deleteEventDraft,
     deleteTrackedEntityDraft,
 } from "../db/operations";
-import type { EventDraft, TrackedEntityDraft } from "../db";
+import { FlattenedEvent, FlattenedTrackedEntity } from "../db";
 
 /**
  * Auto-save hook for Ant Design forms
@@ -41,7 +41,7 @@ export interface UseAutoSaveOptions {
     interval?: number;
 
     /** Callback when draft is saved */
-    onSave?: (draft: EventDraft | TrackedEntityDraft) => void;
+    onSave?: (draft: FlattenedEvent | FlattenedTrackedEntity) => void;
 
     /** Callback when draft save fails */
     onError?: (error: Error) => void;
@@ -148,53 +148,61 @@ export function useAutoSave(options: UseAutoSaveOptions): UseAutoSaveReturn {
                 return;
             }
 
-            let savedDraft: EventDraft | TrackedEntityDraft;
+            let savedDraft: FlattenedEvent | FlattenedTrackedEntity;
 
-            if (type === "event") {
-                savedDraft = await saveEventDraft({
-                    id: draftId,
-                    event: draftId,
-                    programStage: metadata.programStage || "",
-                    trackedEntity: metadata.trackedEntity || "",
-                    enrollment: metadata.enrollment || "",
-                    dataValues: values,
-                    occurredAt:
-                        values.occurredAt ||
-                        metadata.occurredAt ||
-                        new Date().toISOString(),
-                    orgUnit: metadata.orgUnit || "",
-                    program: metadata.program || "",
-                    isNew: metadata.isNew ?? true,
-                });
-            } else {
-                savedDraft = await saveTrackedEntityDraft({
-                    id: draftId,
-                    attributes: values,
-                    enrollment: {
-                        enrollment: metadata.enrollment || draftId,
-                        program: metadata.program || "",
-                        orgUnit: metadata.orgUnit || "",
-                        enrolledAt: new Date().toISOString(),
-                        occurredAt: new Date().toISOString(),
-                        status: "ACTIVE",
-                    } as any,
-                    orgUnit: metadata.orgUnit || "",
-                    program: metadata.program || "",
-                    isNew: metadata.isNew ?? true,
-                });
-            }
+            // if (type === "event") {
+            //     savedDraft = await saveEventDraft({
+            //         event: draftId,
+            //         programStage: metadata.programStage || "",
+            //         trackedEntity: metadata.trackedEntity || "",
+            //         enrollment: metadata.enrollment || "",
+            //         dataValues: values,
+            //         occurredAt:
+            //             values.occurredAt ||
+            //             metadata.occurredAt ||
+            //             new Date().toISOString(),
+            //         orgUnit: metadata.orgUnit || "",
+            //         program: metadata.program || "",
+            //         deleted: false,
+            //         followUp: false,
+            //         status: "",
+            //         // isNew: metadata.isNew ?? true,
+            //     });
+            // } else {
+            //     savedDraft = await saveTrackedEntityDraft({
+            //         trackedEntity: draftId,
+            //         attributes: values,
+            //         enrollment: {
+            //             enrollment: metadata.enrollment || draftId,
+            //             program: metadata.program || "",
+            //             orgUnit: metadata.orgUnit || "",
+            //             enrolledAt: new Date().toISOString(),
+            //             occurredAt: new Date().toISOString(),
+            //             status: "ACTIVE",
+            //         } as any,
+            //         orgUnit: metadata.orgUnit || "",
+            //         // isNew: metadata.isNew ?? true,
+            //         createdAtClient: new Date().toISOString(),
+            //         deleted: false,
+            //         events: [],
+            //         potentialDuplicate: false,
+            //         relationships: [],
+            //         inactive: false,
+            //         trackedEntityType: "",
+            //     });
+            // }
 
             // ✅ OPTIMIZED: Track last saved values for change detection
             lastValuesRef.current = values;
             lastSavedRef.current = new Date();
-            console.log(
-                `💾 Draft auto-saved: ${type} - ${draftId}`,
-                savedDraft,
-            );
+            // console.log(
+            //     `💾 Draft auto-saved: ${type} - ${draftId}`,
+            //     savedDraft,
+            // );
 
-            if (onSave) {
-                onSave(savedDraft);
-            }
+            // if (onSave) {
+            //     onSave(savedDraft);
+            // }
         } catch (error) {
             console.error("❌ Auto-save failed:", error);
             if (onError && error instanceof Error) {
