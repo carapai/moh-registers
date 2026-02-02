@@ -189,7 +189,7 @@ export default function Client() {
                             title={
                                 <Space>
                                     <CalendarOutlined />
-                                    <span>Patient Visits</span>
+                                    <span>Client Visits</span>
                                 </Space>
                             }
                             extra={

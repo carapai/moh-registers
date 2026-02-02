@@ -58,38 +58,77 @@ export const flattenTrackedEntity = ({
         };
     });
 
-    const trackedEntityRelationships = relationships.map((rel) => {
-        return {
-            ...rel,
-            syncStatus: "synced",
-            version: 1,
-            lastSynced: new Date().toISOString(),
-            syncError: "",
-        };
-    });
-
-    const enrollmentRelationships = enrollments.flatMap((enr) =>
-        enr.relationships?.map((rel) => {
+    const trackedEntityRelationships = relationships.map(
+        ({
+            from: {
+                trackedEntity: { trackedEntity, attributes },
+            },
+            to: {
+                trackedEntity: {
+                    attributes: toAttributes,
+                    trackedEntity: toTrackedEntity,
+                },
+            },
+            ...rel
+        }) => {
             return {
-                ...enr,
+                ...rel,
                 syncStatus: "synced",
                 version: 1,
                 lastSynced: new Date().toISOString(),
                 syncError: "",
+                from: {
+                    id: trackedEntity,
+                    fields: attributes.reduce((acc, attr) => {
+                        acc[attr.attribute] = attr.value;
+                        return acc;
+                    }, {}),
+                },
+                to: {
+                    id: toTrackedEntity,
+                    fields: toAttributes.reduce((acc, attr) => {
+                        acc[attr.attribute] = attr.value;
+                        return acc;
+                    }, {}),
+                },
             };
-        }),
+        },
     );
 
     const eventRelationships = flattenedEvents.flatMap((ev) =>
-        ev.relationships?.map((rel) => {
-            return {
-                ...ev,
-                syncStatus: "synced",
-                version: 1,
-                lastSynced: new Date().toISOString(),
-                syncError: "",
-            };
-        }),
+        ev.relationships.map(
+            ({
+                from: {
+                    event: { event, dataValues },
+                },
+                to: {
+                    event: { event: toEvent, dataValues: toDataValues },
+                },
+                ...rel
+            }) => {
+                return {
+                    ...rel,
+                    from: {
+                        id: event,
+                        fields: dataValues.reduce((acc, attr) => {
+                            acc[attr.dataElement] = attr.value;
+                            return acc;
+                        }, {}),
+                    },
+                    to: {
+                        id: toEvent,
+                        fields: toDataValues.reduce((acc, attr) => {
+                            acc[attr.dataElement] = attr.value;
+                            return acc;
+                        }, {}),
+                    },
+                    syncStatus: "synced",
+                    version: 1,
+                    lastSynced: new Date().toISOString(),
+                    syncError: "",
+                };
+            },
+        ),
     );
 
     return {
@@ -98,11 +137,7 @@ export const flattenTrackedEntity = ({
         enrollment: enrollmentDetails,
         events: flattenedEvents,
         trackedEntity,
-        relationships: [
-            ...eventRelationships,
-            ...enrollmentRelationships,
-            ...trackedEntityRelationships,
-        ],
+        relationships: [...eventRelationships, ...trackedEntityRelationships],
         syncStatus: "synced",
         version: 1,
         lastSynced: new Date().toISOString(),
@@ -977,12 +1012,14 @@ export const createEmptyEvent = ({
     trackedEntity,
     enrollment,
     programStage,
+    parentEvent,
 }: {
     orgUnit: string;
     program: string;
     trackedEntity: string;
     enrollment: string;
     programStage: string;
+    parentEvent?: string;
 }) => {
     const eventId = generateUid();
     const now = dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ");
@@ -1007,6 +1044,7 @@ export const createEmptyEvent = ({
         syncError: "",
         syncStatus: "draft",
         version: 1,
+        parentEvent: parentEvent || undefined,
     };
 };
 

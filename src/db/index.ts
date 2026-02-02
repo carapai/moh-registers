@@ -32,6 +32,19 @@ export type FlattenedEvent = FlattenedTrackedEntity["events"][number];
 export type FlattenedRelationship =
     FlattenedTrackedEntity["relationships"][number];
 
+// BasicTrackedEntity type used by relationship components
+// This represents the structure after populateRelationshipsForEntity() transformation
+export interface BasicTrackedEntity extends FlattenedTrackedEntity {
+    attributes: Array<{
+        attribute: string;
+        value: string;
+        valueType: string;
+        createdAt: string;
+        updatedAt: string;
+    }>;
+    enrollments: Array<FlattenedTrackedEntity["enrollment"]>;
+}
+
 // Sync status for entities and events
 export type SyncStatus = "draft" | "pending" | "syncing" | "synced" | "failed";
 
@@ -159,8 +172,9 @@ export class RegisterDatabase extends Dexie {
             events: "event,trackedEntity,programStage,enrollment,occurredAt,updatedAt,syncStatus,version,lastModified,lastSynced",
 
             // Relationships with sync status, version tracking, and lastSynced
+            // Using flattened structure: from.id and to.id
             relationships:
-                "relationship,from.trackedEntity.trackedEntity,from.event.event,syncStatus,version,lastModified,lastSynced",
+                "relationship,from.id,to.id,syncStatus,version,lastModified,lastSynced",
 
             // Relationship types
             relationshipTypes: "id",

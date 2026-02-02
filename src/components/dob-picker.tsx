@@ -28,13 +28,11 @@ const { Text } = Typography;
 export default function DobPicker({
     form,
     dataElement,
-    onTriggerProgramRules,
     onAutoSave,
     disabled = false,
 }: {
     form: FormInstance<any>;
     dataElement: DataElement | TrackedEntityAttribute;
-    onTriggerProgramRules?: () => void;
     onAutoSave?: (dataElementId: string, value: any) => void;
     disabled?: boolean;
 }) {
@@ -68,10 +66,7 @@ export default function DobPicker({
             newDays ?? 0,
         );
         const dobString = calculatedDob.format('YYYY-MM-DD');
-        console.log("Calculated DOB string:", dobString);
         form.setFieldValue(dataElement.id, dobString);
-        console.log("Form field value after set:", form.getFieldValue(dataElement.id));
-        onTriggerProgramRules?.();
         onAutoSave?.(dataElement.id, dobString);
     };
 
@@ -83,14 +78,12 @@ export default function DobPicker({
             setDays(age.days);
             const dobString = date.format('YYYY-MM-DD');
             form.setFieldValue(dataElement.id, dobString);
-            onTriggerProgramRules?.();
             onAutoSave?.(dataElement.id, dobString);
         } else {
             setYears(null);
             setMonths(null);
             setDays(null);
             form.setFieldValue(dataElement.id, null);
-            onTriggerProgramRules?.();
             onAutoSave?.(dataElement.id, null);
         }
     };

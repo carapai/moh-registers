@@ -13,14 +13,12 @@ export default function SectionCapture({
     stage,
     ruleResult,
     form,
-    handleTriggerProgramRules,
     updateDataValue,
 }: {
     section: ProgramStageSection;
     stage: ProgramStage;
     ruleResult: ReturnType<typeof useProgramRules>["ruleResult"];
     form: FormInstance;
-    handleTriggerProgramRules: () => void;
     updateDataValue: (dataElementId: string, value: any) => void;
 }) {
     const { dataElements, optionGroups, optionSets } =
@@ -108,7 +106,6 @@ export default function SectionCapture({
                             required={compulsory}
                             key={dataElement.id}
                             form={form}
-                            onTriggerProgramRules={handleTriggerProgramRules}
                             onAutoSave={updateDataValue}
                         />
                     );

@@ -20,6 +20,7 @@ import {
 import { createGetValueProps, createNormalize, isDate } from "../utils/utils";
 import DobPicker from "./dob-picker";
 import VillageSelect from "./village-select";
+import { FlattenedEvent, FlattenedTrackedEntity } from "../db";
 
 export const DataElementField = React.memo<{
     dataElement: DataElement | TrackedEntityAttribute;
@@ -29,10 +30,14 @@ export const DataElementField = React.memo<{
     messages: Array<Message>;
     warnings: Array<Message>;
     required: boolean;
+    sm?: number;
+    lg?: number;
     span?: number;
-    form: FormInstance<any>;
+    md?: number;
+    xs?: number;
+    xl?: number;
+    form: FormInstance<FlattenedTrackedEntity | FlattenedEvent>;
     customLabel?: string;
-    onTriggerProgramRules: () => void;
     onAutoSave: (dataElementId: string, value: any) => void;
     desktopRenderType?: RenderType["type"];
     disabled?: boolean; // Disable field (e.g., for assigned values from program rules)
@@ -45,11 +50,15 @@ export const DataElementField = React.memo<{
         messages,
         warnings,
         required,
-        span = 8,
+        sm,
+        lg,
+        span,
+        md,
+        xs,
+        xl,
         form,
         customLabel,
         desktopRenderType,
-        onTriggerProgramRules,
         onAutoSave,
         disabled = false,
     }) => {
@@ -66,7 +75,6 @@ export const DataElementField = React.memo<{
                 onBlur={
                     isTextInput
                         ? (e) => {
-                              onTriggerProgramRules();
                               onAutoSave(dataElement.id, e.target.value);
                           }
                         : undefined
@@ -107,7 +115,6 @@ export const DataElementField = React.memo<{
                     allowClear
                     mode="multiple"
                     onChange={(value) => {
-                        onTriggerProgramRules();
                         onAutoSave(dataElement.id, value);
                     }}
                     showSearch={{
@@ -140,7 +147,6 @@ export const DataElementField = React.memo<{
                     vertical={desktopRenderType === "VERTICAL_RADIOBUTTONS"}
                     value={currentValue}
                     onChange={(e) => {
-                        onTriggerProgramRules();
                         onAutoSave(dataElement.id, e.target.value);
                     }}
                 >
@@ -157,7 +163,6 @@ export const DataElementField = React.memo<{
                                         dataElement.id,
                                         undefined,
                                     );
-                                    onTriggerProgramRules();
                                     onAutoSave(dataElement.id, undefined);
                                 }
                             }}
@@ -179,7 +184,6 @@ export const DataElementField = React.memo<{
                     }}
                     allowClear
                     onChange={(value) => {
-                        onTriggerProgramRules();
                         onAutoSave(dataElement.id, value);
                     }}
                     showSearch={{
@@ -200,7 +204,6 @@ export const DataElementField = React.memo<{
                 <Checkbox
                     disabled={disabled}
                     onChange={(e) => {
-                        onTriggerProgramRules();
                         onAutoSave(dataElement.id, e.target.checked);
                     }}
                 >
@@ -212,7 +215,6 @@ export const DataElementField = React.memo<{
                 <DobPicker
                     form={form}
                     dataElement={dataElement}
-                    onTriggerProgramRules={onTriggerProgramRules}
                     onAutoSave={onAutoSave}
                     disabled={disabled}
                 />
@@ -226,7 +228,6 @@ export const DataElementField = React.memo<{
                     }}
                     showTime
                     onChange={(date) => {
-                        onTriggerProgramRules();
                         onAutoSave(
                             dataElement.id,
                             date
@@ -244,7 +245,6 @@ export const DataElementField = React.memo<{
                         width: "100%",
                     }}
                     onChange={(date) => {
-                        onTriggerProgramRules();
                         onAutoSave(
                             dataElement.id,
                             date ? date.format("YYYY-MM-DD") : undefined,
@@ -258,7 +258,6 @@ export const DataElementField = React.memo<{
                     disabled={disabled}
                     rows={4}
                     onBlur={(e) => {
-                        onTriggerProgramRules();
                         onAutoSave(dataElement.id, e.target.value);
                     }}
                 />
@@ -275,7 +274,6 @@ export const DataElementField = React.memo<{
                         width: "100%",
                     }}
                     onBlur={(e) => {
-                        onTriggerProgramRules();
                         onAutoSave(
                             dataElement.id,
                             e.target.value ? Number(e.target.value) : undefined,
@@ -288,11 +286,11 @@ export const DataElementField = React.memo<{
         return (
             <Col
                 key={dataElement.id}
-                sm={{ span: 24 }}
-                md={{ span: 24 }}
-                lg={{ span: 12 }}
-                xs={{ span: 24 }}
-                xl={{ span }}
+                sm={{ span: sm }}
+                md={{ span: md }}
+                lg={{ span: lg }}
+                xs={{ span: xs }}
+                xl={{ span: xl }}
             >
                 <Form.Item
                     key={dataElement.id}

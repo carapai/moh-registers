@@ -20,12 +20,12 @@ import dayjs from "dayjs";
 import { useLiveQuery } from "dexie-react-hooks";
 import { singular } from "pluralize";
 import React, { useCallback, useEffect, useState } from "react";
-import { db } from "../db";
-import { useDexieEventForm } from "../hooks/useDexieEventForm";
+import { db, FlattenedEvent, FlattenedTrackedEntity } from "../db";
+import { useDexiePersistence } from "../hooks/useDexiePersistence";
+import { useTrackerFormInit } from "../hooks/useTrackerFormInit";
 import { useEventSyncStatus } from "../hooks/useEntitySyncStatus";
 import { useEventValidation } from "../hooks/useEventValidation";
 import { useProgramRulesWithDexie } from "../hooks/useProgramRules";
-import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
 import { ProgramStage } from "../schemas";
 import {
@@ -39,7 +39,11 @@ const { Text } = Typography;
 
 export const ProgramStageCapture: React.FC<{
     programStage: ProgramStage;
-}> = ({ programStage }) => {
+    trackedEntity: FlattenedTrackedEntity;
+    mainEvent: FlattenedEvent;
+    captureMode?: "modal" | "inline"; // Configure how to add new records
+}> = ({ programStage, trackedEntity, mainEvent, captureMode = "modal" }) => {
+    const [localEventId, setLocalEventId] = useState<string>("");
     const [stageForm] = Form.useForm();
     const {
         dataElements,
@@ -51,69 +55,57 @@ export const ProgramStageCapture: React.FC<{
     } = RootRoute.useLoaderData();
     const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
     const [modalKey, setModalKey] = useState(0);
+    const [inlineEditingId, setInlineEditingId] = useState<string | null>(null);
     const medicines = new Map(
         optionSets.get("Fm205YyFeRg")?.map(({ code, name }) => [code, name]),
     );
-    const programStageDataElements = new Map(
-        programStage.programStageDataElements.map((psde) => [
-            psde.dataElement.id,
-            {
-                allowFutureDate: psde.allowFutureDate,
-                renderOptionsAsRadio: psde.renderType !== undefined,
-                compulsory: psde.compulsory,
-                vertical: psde.renderType
-                    ? psde.renderType.DESKTOP?.type !==
-                      "HORIZONTAL_RADIOBUTTONS"
-                    : false,
-                ...dataElements.get(psde.dataElement.id),
-            },
-        ]),
-    );
-    const enrollment = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity.enrollment,
-    );
-    const trackerActor = TrackerContext.useActorRef();
 
-    const currentEventId = TrackerContext.useSelector(
-        (state) => state.context.currentEvent?.event || null,
-    );
-    const mainEvent = TrackerContext.useSelector(
-        (state) => state.context.mainEvent,
-    );
-
-    const trackedEntity = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity,
-    );
-
-    const currentEventFromState = TrackerContext.useSelector(
-        (state) => state.context.currentEvent,
-    );
-
-    // Use Dexie hook for event data management
+    // Use unified persistence hook
     const {
-        event: currentEvent,
-        updateDataValue,
-        updateDataValues,
-        markEventReady,
-    } = useDexieEventForm({ currentEvent: currentEventFromState! });
-
-    // Use Dexie-integrated program rules
-    const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
-        form: stageForm,
-        programRules,
-        programRuleVariables,
-        programStage: programStage.id,
-        trackedEntityAttributes: trackedEntity.attributes,
-        enrollment: trackedEntity.enrollment,
-        onAssignments: updateDataValues,
-        applyAssignmentsToForm: true,
-        persistAssignments: false, // Don't auto-persist during typing
-        clearHiddenFields: true, // Automatically clear hidden fields
-        program: program.id,
-        debounceMs: 300,
+        entity: currentEvent,
+        updateField,
+        updateFields,
+    } = useDexiePersistence<FlattenedEvent>({
+        entityType: "event",
+        entityId: localEventId,
     });
 
-    // Validate event for required fields
+    // Use program rules with autoExecute enabled
+    const { ruleResult, executeAndApplyRules, triggerAutoExecute } =
+        useProgramRulesWithDexie({
+            form: stageForm,
+            programRules,
+            programRuleVariables,
+            programStage: programStage.id,
+            trackedEntityAttributes: trackedEntity.attributes,
+            enrollment: trackedEntity.enrollment,
+            onAssignments: updateFields,
+            applyAssignmentsToForm: true,
+            persistAssignments: true,
+            clearHiddenFields: true, // Automatically clear hidden fields
+            program: program.id,
+            debounceMs: 300,
+            autoExecute: true, // Enable automatic rule execution
+        });
+
+    // Wrap updateField to also trigger program rules
+    const updateFieldWithRules = useCallback(
+        (fieldId: string, value: any) => {
+            updateField(fieldId, value);
+            triggerAutoExecute();
+        },
+        [updateField, triggerAutoExecute],
+    );
+
+    // Use unified form initialization hook (for both modal and inline modes)
+    useTrackerFormInit({
+        form: stageForm,
+        entity: currentEvent,
+        initialValues: {},
+        executeRules: executeAndApplyRules,
+        enabled: isVisitModalOpen || inlineEditingId !== null,
+    });
+
     const { isValid, readyToCreate } = useEventValidation({
         programStage: programStage,
         dataValues: currentEvent?.dataValues || {},
@@ -123,13 +115,13 @@ export const ProgramStageCapture: React.FC<{
     // Auto-mark event as ready when validation passes
     useEffect(() => {
         if (readyToCreate && currentEvent?.syncStatus === "draft") {
-            markEventReady();
+            db.events.update(currentEvent.event, { syncStatus: "pending" });
         }
-    }, [readyToCreate, currentEvent?.syncStatus, markEventReady]);
+    }, [readyToCreate, currentEvent?.syncStatus, currentEvent?.event]);
 
     // Get sync status for current event
     const { syncStatus, isPending, isSyncing, hasFailed, syncError } =
-        useEventSyncStatus(currentEventId);
+        useEventSyncStatus(localEventId);
 
     const currentDataElements = new Map(
         programStage.programStageDataElements.map((psde) => [
@@ -143,50 +135,60 @@ export const ProgramStageCapture: React.FC<{
         ]),
     );
 
-    // Load events from Dexie reactively
     const events =
         useLiveQuery(async () => {
-            if (!trackedEntity.trackedEntity || !mainEvent.occurredAt)
-                return [];
+            if (!trackedEntity.trackedEntity || !mainEvent.event) return [];
             return await db.events
                 .where("trackedEntity")
                 .equals(trackedEntity.trackedEntity)
                 .and(
                     (e) =>
                         e.programStage === programStage.id &&
-                        e.occurredAt === mainEvent.occurredAt,
+                        e.parentEvent === mainEvent.event,
                 )
                 .toArray();
-        }, [
-            trackedEntity.trackedEntity,
-            programStage.id,
-            mainEvent.occurredAt,
-        ]) || [];
+        }, [trackedEntity.trackedEntity, programStage.id, mainEvent.event]) ||
+        [];
 
     const showVisitModal = (
         visit: ReturnType<typeof flattenTrackedEntity>["events"][number],
     ) => {
-        trackerActor.send({ type: "SET_CURRENT_EVENT", currentEvent: visit });
+        // trackerActor.send({ type: "SET_CURRENT_EVENT", currentEvent: visit });
+        setLocalEventId(visit.event);
         setModalKey((prev) => prev + 1);
         setIsVisitModalOpen(true);
     };
 
-    const showCreateVisitModal = () => {
+    const showCreateVisitModal = async () => {
+        if (!mainEvent?.event) {
+            message.error(
+                "Cannot create child event: parent event is not loaded",
+            );
+            return;
+        }
+
         stageForm.resetFields();
         const emptyEvent = createEmptyEvent({
-            program: enrollment.program,
-            trackedEntity: enrollment.trackedEntity,
-            enrollment: enrollment.enrollment,
-            orgUnit: enrollment.orgUnit,
+            program: trackedEntity.enrollment.program,
+            trackedEntity: trackedEntity.trackedEntity,
+            enrollment: trackedEntity.enrollment.enrollment,
+            orgUnit: trackedEntity.orgUnit,
             programStage: programStage.id,
+            parentEvent: mainEvent.event,
         });
 
-        trackerActor.send({
-            type: "SET_CURRENT_EVENT",
-            currentEvent: emptyEvent,
-        });
-        setModalKey((prev) => prev + 1);
-        setIsVisitModalOpen(true);
+        // Save the empty event to DexieJS immediately
+        await db.events.put(emptyEvent as any);
+
+        setLocalEventId(emptyEvent.event);
+
+        if (captureMode === "modal") {
+            setModalKey((prev) => prev + 1);
+            setIsVisitModalOpen(true);
+        } else {
+            // Inline mode - set the new event as being edited
+            setInlineEditingId(emptyEvent.event);
+        }
     };
 
     const columns: TableProps<
@@ -214,59 +216,48 @@ export const ProgramStageCapture: React.FC<{
             title: "Action",
             key: "action",
             width: 100,
+            fixed: "right",
             render: (_, record) => (
-                <Button
-                    icon={<EyeOutlined />}
-                    onClick={() => {
-                        showVisitModal(record);
-                    }}
-                >
-                    View
-                </Button>
+                <Flex gap="small" align="center">
+                    <Button
+                        danger
+                        onClick={() => {
+                            Modal.confirm({
+                                title: 'Delete Event',
+                                content: 'Are you sure you want to delete this event? This action cannot be undone.',
+                                okText: 'Delete',
+                                okType: 'danger',
+                                onOk: async () => {
+                                    try {
+                                        await db.events.delete(record.event);
+                                        message.success('Event deleted successfully');
+                                    } catch (error) {
+                                        console.error('Failed to delete event:', error);
+                                        message.error('Failed to delete event');
+                                    }
+                                }
+                            });
+                        }}
+                    >
+                        Delete
+                    </Button>
+                    <Button
+                        icon={<EyeOutlined />}
+                        onClick={() => {
+                            showVisitModal(record);
+                        }}
+                    >
+                        View
+                    </Button>
+                </Flex>
             ),
         },
     ];
-
-    const handleTriggerProgramRules = useCallback(() => {
-        // Execute program rules with current form values
-        executeAndApplyRules();
-    }, [executeAndApplyRules]);
-
-    useEffect(() => {
-        if (isVisitModalOpen && currentEvent) {
-            stageForm.resetFields();
-            if (
-                currentEvent.dataValues &&
-                Object.keys(currentEvent.dataValues).length > 0
-            ) {
-                // Initialize form with data from Dexie (one-time sync)
-                stageForm.setFieldsValue(currentEvent.dataValues);
-                console.log("📝 Form initialized with event dataValues");
-
-                // Execute program rules with current event data
-                executeAndApplyRules(currentEvent.dataValues);
-            } else {
-                console.log("✨ Creating new stage event with empty form");
-            }
-        }
-    }, [
-        isVisitModalOpen,
-        currentEvent?.event,
-        executeAndApplyRules,
-        stageForm,
-    ]);
-
-    // Program rule assignments are now automatically handled by useProgramRulesWithDexie
-    // with persistAssignments: true, so no manual save needed
 
     const [shouldCreateAgain, setShouldCreateAgain] = useState(false);
 
     const onStageSubmit = async (values: Record<string, any>) => {
         if (ruleResult.errors.length > 0) {
-            console.error(
-                "Form has validation errors from program rules:",
-                ruleResult.errors,
-            );
             message.error({
                 content: `Validation failed: ${ruleResult.errors.map((e) => e.content).join(", ")}`,
                 duration: 5,
@@ -280,7 +271,7 @@ export const ProgramStageCapture: React.FC<{
             };
 
             // Update event data in Dexie (automatic sync)
-            await updateDataValues(finalValues);
+            await updateFields(finalValues);
 
             // Check if we should create another record
             if (shouldCreateAgain) {
@@ -288,7 +279,6 @@ export const ProgramStageCapture: React.FC<{
                 setShouldCreateAgain(false);
                 // Reset form and create new event
                 stageForm.resetFields();
-                trackerActor.send({ type: "RESET_CURRENT_EVENT" });
                 // Show success message
                 message.success({
                     content: `${singular(programStage.name)} saved successfully!`,
@@ -297,10 +287,15 @@ export const ProgramStageCapture: React.FC<{
                 // Create a new empty event
                 showCreateVisitModal();
             } else {
-                // Close modal and reset
-                setIsVisitModalOpen(false);
+                // Close modal/inline and reset
+                if (captureMode === "modal") {
+                    setIsVisitModalOpen(false);
+                } else {
+                    setInlineEditingId(null);
+                }
                 stageForm.resetFields();
-                trackerActor.send({ type: "RESET_CURRENT_EVENT" });
+                // Clear the local event ID
+                setLocalEventId("");
                 message.success({
                     content: `${singular(programStage.name)} saved successfully!`,
                     duration: 2,
@@ -328,6 +323,148 @@ export const ProgramStageCapture: React.FC<{
         }
     };
 
+    const renderInlineEditForm = (record: FlattenedEvent) => {
+        return (
+            <div style={{ padding: "16px", background: "#fafafa" }}>
+                <Form
+                    form={stageForm}
+                    layout="vertical"
+                    onFinish={onStageSubmit}
+                >
+                    <Flex vertical gap={16}>
+                        {programStage.programStageSections.flatMap((section) => {
+                            if (ruleResult.hiddenSections.has(section.id))
+                                return [];
+
+                            return (
+                                <Row gutter={[16, 0]} key={section.id}>
+                                    {section.dataElements.flatMap((dataElement) => {
+                                        if (
+                                            ruleResult.hiddenFields.has(
+                                                dataElement.id,
+                                            ) &&
+                                            ruleResult.shownOptionGroups[
+                                                dataElement.id
+                                            ] === undefined
+                                        ) {
+                                            return [];
+                                        }
+
+                                        const currentDataElement =
+                                            dataElements.get(dataElement.id);
+
+                                        const optionSet =
+                                            currentDataElement?.optionSet?.id ?? "";
+
+                                        const hiddenOptions =
+                                            ruleResult.hiddenOptions[dataElement.id];
+
+                                        const shownOptionGroups =
+                                            ruleResult.shownOptionGroups[
+                                                dataElement.id
+                                            ] || new Set<string>();
+
+                                        let finalOptions = optionSets
+                                            .get(optionSet)
+                                            ?.flatMap((o) => {
+                                                if (hiddenOptions?.has(o.id)) {
+                                                    return [];
+                                                }
+                                                return o;
+                                            });
+
+                                        if (shownOptionGroups.size > 0) {
+                                            const currentOptions =
+                                                optionGroups.get(
+                                                    shownOptionGroups.values().next().value,
+                                                ) ?? [];
+                                            finalOptions = currentOptions.map(
+                                                ({ code, id, name }) => ({
+                                                    id,
+                                                    code,
+                                                    name,
+                                                    optionSet,
+                                                }),
+                                            );
+                                        }
+
+                                        const errors =
+                                            ruleResult.errors.filter(
+                                                (msg) => msg.key === dataElement.id,
+                                            );
+                                        const messages =
+                                            ruleResult.messages.filter(
+                                                (msg) => msg.key === dataElement.id,
+                                            );
+                                        const warnings =
+                                            ruleResult.warnings.filter(
+                                                (msg) => msg.key === dataElement.id,
+                                            );
+                                        const stageDataElement =
+                                            programStage.programStageDataElements.find(
+                                                (de) => de.id === dataElement.id,
+                                            );
+                                        const compulsory =
+                                            stageDataElement?.compulsory ?? false;
+                                        const desktopRenderType =
+                                            stageDataElement?.renderType?.DESKTOP;
+
+                                        return (
+                                            <DataElementField
+                                                key={dataElement.id}
+                                                dataElement={currentDataElement!}
+                                                hidden={ruleResult.hiddenFields.has(
+                                                    dataElement.id,
+                                                )}
+                                                finalOptions={finalOptions ?? []}
+                                                errors={errors}
+                                                messages={messages}
+                                                warnings={warnings}
+                                                required={compulsory}
+                                                span={calculateColSpan(
+                                                    section.dataElements.length,
+                                                    2,
+                                                )}
+                                                form={stageForm}
+                                                onAutoSave={updateFieldWithRules}
+                                                desktopRenderType={
+                                                    desktopRenderType?.type
+                                                }
+                                            />
+                                        );
+                                    })}
+                                </Row>
+                            );
+                        })}
+                        <Flex justify="flex-end" gap="small">
+                            <Button
+                                onClick={() => {
+                                    stageForm.resetFields();
+                                    setInlineEditingId(null);
+                                    setLocalEventId("");
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={() => handleSubmit()}
+                            >
+                                Save
+                            </Button>
+                            <Button
+                                type="primary"
+                                onClick={() => handleSubmit(true)}
+                            >
+                                Save & Create Another
+                            </Button>
+                        </Flex>
+                    </Flex>
+                </Form>
+            </div>
+        );
+    };
+
     return (
         <Flex
             style={{
@@ -343,6 +480,30 @@ export const ProgramStageCapture: React.FC<{
                 pagination={false}
                 rowKey="event"
                 scroll={{ x: "max-content" }}
+                expandable={
+                    captureMode === "inline"
+                        ? {
+                              expandedRowKeys: inlineEditingId ? [inlineEditingId] : [],
+                              onExpand: (expanded, record) => {
+                                  if (expanded) {
+                                      setInlineEditingId(record.event);
+                                      setLocalEventId(record.event);
+                                  } else {
+                                      setInlineEditingId(null);
+                                      setLocalEventId("");
+                                  }
+                              },
+                              expandedRowRender: (record) => {
+                                  // Render the inline edit form with a key to force re-render
+                                  return (
+                                      <div key={record.event}>
+                                          {renderInlineEditForm(record)}
+                                      </div>
+                                  );
+                              },
+                          }
+                        : undefined
+                }
                 title={() => {
                     return (
                         <Flex
@@ -390,6 +551,8 @@ export const ProgramStageCapture: React.FC<{
                 open={isVisitModalOpen}
                 onCancel={() => {
                     stageForm.resetFields();
+                    // Clear the local event ID to prevent stale data
+                    setLocalEventId("");
                     // trackerActor.send({ type: "RESET_CURRENT_EVENT" });
                     setIsVisitModalOpen(false);
                 }}
@@ -490,9 +653,11 @@ export const ProgramStageCapture: React.FC<{
                             <Button
                                 onClick={() => {
                                     stageForm.resetFields();
-                                    trackerActor.send({
-                                        type: "RESET_CURRENT_EVENT",
-                                    });
+                                    // Clear the local event ID
+                                    setLocalEventId("");
+                                    // trackerActor.send({
+                                    //     type: "RESET_CURRENT_EVENT",
+                                    // });
                                     setIsVisitModalOpen(false);
                                 }}
                                 style={{ borderRadius: 8 }}
@@ -682,11 +847,8 @@ export const ProgramStageCapture: React.FC<{
                                                         }
                                                         key={`${section.id}${dataElement.id}`}
                                                         form={stageForm}
-                                                        onTriggerProgramRules={
-                                                            handleTriggerProgramRules
-                                                        }
                                                         onAutoSave={
-                                                            updateDataValue
+                                                            updateFieldWithRules
                                                         }
                                                     />
                                                 );

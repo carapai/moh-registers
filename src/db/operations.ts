@@ -130,22 +130,16 @@ export async function saveRelationship(
 
 /**
  * Get relationships by entity ID
+ * Uses flattened structure (from.id) instead of nested (from.trackedEntity.trackedEntity)
  */
 export async function getRelationshipsByEntity(
     entityId: string,
-    entityType: "trackedEntity" | "event",
 ): Promise<FlattenedRelationship[]> {
-    if (entityType === "trackedEntity") {
-        return await db.relationships
-            .where("from.trackedEntity.trackedEntity")
-            .equals(entityId)
-            .toArray();
-    } else {
-        return await db.relationships
-            .where("from.event.event")
-            .equals(entityId)
-            .toArray();
-    }
+    // Query using flattened structure
+    return await db.relationships
+        .where("from.id")
+        .equals(entityId)
+        .toArray();
 }
 
 /**
@@ -155,18 +149,14 @@ export async function getRelationshipsByEntity(
 export async function populateRelationshipsForEntity(
     entityId: string,
 ): Promise<FlattenedRelationship[]> {
-    const relationships = await getRelationshipsByEntity(
-        entityId,
-        "trackedEntity",
-    );
+    const relationships = await getRelationshipsByEntity(entityId);
 
     // Fetch referenced entities and convert to BasicTrackedEntity format
+    // Now using flattened structure where rel.to.id contains the tracked entity ID
     const populated = await Promise.all(
         relationships.map(async (rel) => {
-            if (rel.to.trackedEntity) {
-                const toEntity = await db.trackedEntities.get(
-                    rel.to.trackedEntity.trackedEntity,
-                );
+            if (rel.to.id) {
+                const toEntity = await db.trackedEntities.get(rel.to.id);
 
                 if (toEntity) {
                     // Convert flattened entity to BasicTrackedEntity format

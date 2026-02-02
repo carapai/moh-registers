@@ -1,24 +1,24 @@
 import {
-    CloseOutlined,
-    FilterOutlined,
-    MoreOutlined,
-    SearchOutlined,
-    SettingOutlined,
+	CloseOutlined,
+	FilterOutlined,
+	MoreOutlined,
+	SearchOutlined,
+	SettingOutlined,
 } from "@ant-design/icons";
 import type { InputRef, MenuProps, TableColumnType } from "antd";
 import {
-    Avatar,
-    Button,
-    Checkbox,
-    DatePicker,
-    Dropdown,
-    Flex,
-    Input,
-    Popover,
-    Space,
-    Table,
-    Tag,
-    Typography,
+	Avatar,
+	Button,
+	Checkbox,
+	DatePicker,
+	Dropdown,
+	Flex,
+	Input,
+	Popover,
+	Space,
+	Table,
+	Tag,
+	Typography,
 } from "antd";
 import type { TableProps } from "antd/es/table";
 import { FilterDropdownProps } from "antd/es/table/interface";
@@ -28,7 +28,6 @@ import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
 import { TrackedEntityAttribute } from "../schemas";
 import { flattenTrackedEntityResponse } from "../utils/utils";
-import { PatientLastVisit } from "./patient-last-visit";
 import { TrackerRegistration } from "./tracker-registration";
 
 const { Text } = Typography;
@@ -370,9 +369,9 @@ export const PatientTable: React.FC = () => {
         return [
             {
                 displayInList: true,
-                displayFormName: "Patient Name",
-                name: "Patient Name",
-                id: "patientName",
+                displayFormName: "Client Name",
+                name: "Client Name",
+                id: "ClientName",
                 valueType: "TEXT",
                 optionSetValue: false,
                 generated: false,

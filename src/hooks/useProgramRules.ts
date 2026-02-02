@@ -1,5 +1,5 @@
 import { FormInstance } from "antd";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
     ProgramRule,
     ProgramRuleResult,
@@ -10,40 +10,6 @@ import {
     executeProgramRules,
 } from "../utils/utils";
 
-/**
- * useProgramRules Hook
- *
- * Reactive program rules execution for forms with Dexie data integration.
- * Executes DHIS2 program rules based on form values and tracked entity attributes.
- *
- * Features:
- * - Automatic rule execution on form value changes
- * - Reactive rule results (hide/show fields, assign values, show messages)
- * - Integration with Dexie form hooks
- * - Debounced execution to prevent excessive computation
- * - Rule result caching
- *
- * Usage:
- * ```typescript
- * const { ruleResult, executeRules, isExecuting } = useProgramRules({
- *     form: eventForm,
- *     programRules,
- *     programRuleVariables,
- *     programStage: "K2nxbE9ubSs",
- *     trackedEntityAttributes: entity.attributes,
- *     enrollment: entity.enrollment,
- * });
- *
- * // Auto-execute on field change
- * <Input onChange={() => executeRules()} />
- *
- * // Use rule results
- * if (ruleResult.hiddenFields.has(dataElementId)) {
- *     return null;
- * }
- * ```
- */
-
 export interface UseProgramRulesOptions {
     form: FormInstance;
     programRules: ProgramRule[];
@@ -53,13 +19,14 @@ export interface UseProgramRulesOptions {
     trackedEntityAttributes?: Record<string, any>;
     enrollment?: { enrolledAt?: string; occurredAt?: string };
     debounceMs?: number;
-    autoExecute?: boolean; // Auto-execute on form value changes
+    autoExecute?: boolean;
     isRegistration?: boolean;
 }
 
 export interface UseProgramRulesReturn {
     ruleResult: ProgramRuleResult;
     executeRules: (dataValues?: Record<string, any>) => ProgramRuleResult;
+    triggerAutoExecute: () => void;
     isExecuting: boolean;
     hasErrors: boolean;
     hasWarnings: boolean;
@@ -82,7 +49,7 @@ export const useProgramRules = ({
         createEmptyProgramRuleResult(),
     );
     const [isExecuting, setIsExecuting] = useState(false);
-    
+
     const executeRules = useCallback(
         (providedDataValues?: Record<string, any>): ProgramRuleResult => {
             setIsExecuting(true);
@@ -93,6 +60,13 @@ export const useProgramRules = ({
                     ? dataValues
                     : trackedEntityAttributes;
 
+                console.log("⚡ Executing program rules", {
+                    isRegistration,
+                    dataValuesCount: Object.keys(dataValues).length,
+                    attributeValuesCount: Object.keys(attributeValues).length,
+                    programRulesCount: programRules.length,
+                });
+
                 const result = executeProgramRules({
                     programRules,
                     programRuleVariables,
@@ -102,6 +76,13 @@ export const useProgramRules = ({
                     programStage,
                     enrollment,
                 });
+
+                console.log("✅ Program rules result", {
+                    assignments: Object.keys(result.assignments).length,
+                    hiddenFields: result.hiddenFields.size,
+                    errors: result.errors.length,
+                });
+
                 setRuleResult(result);
                 setIsExecuting(false);
 
@@ -120,23 +101,65 @@ export const useProgramRules = ({
             program,
             programStage,
             enrollment,
+            isRegistration,
         ],
     );
 
+    // Track last executed values to prevent infinite loops from auto-execute
+    const lastExecutedValuesRef = useRef<string>("");
+    const timerRef = useRef<NodeJS.Timeout | null>(null);
+
     /**
-     * Auto-execute rules when form values change
+     * Trigger function that can be called manually or automatically
+     * This is exposed so DataElementField can call it on field changes
+     */
+    const triggerAutoExecute = useCallback(() => {
+        if (!autoExecute) return;
+
+        const dataValues = form.getFieldsValue();
+        // For registration, attributes come from form values
+        // For events, attributes come from trackedEntityAttributes
+        const attributeValues = isRegistration ? dataValues : trackedEntityAttributes;
+
+        const valuesString = JSON.stringify({
+            data: dataValues,
+            attributes: attributeValues,
+            enrollment,
+        });
+
+        // Skip if values haven't changed
+        if (lastExecutedValuesRef.current === valuesString) {
+            return;
+        }
+
+        console.log("🔄 Auto-executing program rules", {
+            isRegistration,
+            dataValuesCount: Object.keys(dataValues).length,
+            attributeValuesCount: Object.keys(attributeValues).length,
+            hasChanges: lastExecutedValuesRef.current !== valuesString
+        });
+
+        lastExecutedValuesRef.current = valuesString;
+
+        // Clear existing timer
+        if (timerRef.current) {
+            clearTimeout(timerRef.current);
+        }
+
+        // Start debounce timer
+        timerRef.current = setTimeout(() => {
+            executeRules();
+        }, debounceMs);
+    }, [autoExecute, form, isRegistration, trackedEntityAttributes, enrollment, executeRules, debounceMs]);
+
+    /**
+     * Auto-execute rules when dependencies change
+     * This catches changes to trackedEntityAttributes and enrollment
      */
     useEffect(() => {
         if (!autoExecute) return;
-        let timeoutId: NodeJS.Timeout;
-        timeoutId = setTimeout(() => {
-            executeRules();
-        }, debounceMs);
-
-        return () => {
-            clearTimeout(timeoutId);
-        };
-    }, [form, autoExecute, debounceMs, executeRules]);
+        triggerAutoExecute();
+    }, [autoExecute, trackedEntityAttributes, enrollment, triggerAutoExecute]);
 
     // Derived state
     const hasErrors = ruleResult.errors.length > 0;
@@ -146,6 +169,7 @@ export const useProgramRules = ({
     return {
         ruleResult,
         executeRules,
+        triggerAutoExecute,
         isExecuting,
         hasErrors,
         hasWarnings,
@@ -153,39 +177,8 @@ export const useProgramRules = ({
     };
 };
 
-/**
- * useProgramRulesWithDexie Hook
- *
- * Combines useProgramRules with Dexie form hooks for automatic
- * rule execution and value assignment.
- *
- * Features:
- * - Automatic rule execution on form changes
- * - Automatic assignment application to form
- * - Automatic assignment persistence to Dexie
- * - Error/warning/message display
- *
- * Usage:
- * ```typescript
- * const { event, updateDataValues } = useDexieEventForm({ eventId, form });
- *
- * const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
- *     form,
- *     programRules,
- *     programRuleVariables,
- *     programStage,
- *     trackedEntityAttributes: entity.attributes,
- *     enrollment: entity.enrollment,
- *     onAssignments: updateDataValues, // Auto-persist assignments to Dexie
- * });
- *
- * // Trigger on field change
- * <Input onChange={() => executeAndApplyRules()} />
- * ```
- */
-
 export interface UseProgramRulesWithDexieOptions
-    extends Omit<UseProgramRulesOptions, "autoExecute"> {
+    extends UseProgramRulesOptions {
     onAssignments?: (assignments: Record<string, any>) => Promise<void>;
     applyAssignmentsToForm?: boolean; // Apply to form (default: true)
     persistAssignments?: boolean; // Persist to Dexie (default: false)
@@ -205,11 +198,12 @@ export const useProgramRulesWithDexie = ({
     trackedEntityAttributes = {},
     enrollment,
     debounceMs = 300,
+    autoExecute = false,
     onAssignments,
     applyAssignmentsToForm = true,
     persistAssignments = false,
     clearHiddenFields = false,
-		isRegistration = false,
+    isRegistration = false,
 }: UseProgramRulesWithDexieOptions): UseProgramRulesWithDexieReturn => {
     const basicRules = useProgramRules({
         form,
@@ -220,71 +214,99 @@ export const useProgramRulesWithDexie = ({
         trackedEntityAttributes,
         enrollment,
         debounceMs,
-        autoExecute: true,
-				isRegistration
+        autoExecute,
+        isRegistration,
     });
 
-    /**
-     * Execute rules and apply assignments
-     */
     const executeAndApplyRules = useCallback(
-        async (providedDataValues?: Record<string, any>) => {
-            // Execute rules
-            const result = basicRules.executeRules(providedDataValues);
+        async (providedDataValues?: Record<string, any>, maxIterations: number = 5) => {
+            let iteration = 0;
+            let hasNewAssignments = true;
+            let allAssignments: Record<string, any> = {};
 
-						console.log("useProgramRulesWithDexie - rule execution result:", result.assignments);
+            console.log("🔄 Starting cascading rule execution");
 
-            if (clearHiddenFields && result.hiddenFields.size > 0) {
-                const currentValues = form.getFieldsValue();
-                const fieldsToClear: Record<string, any> = {};
+            // Execute rules repeatedly until no new assignments or max iterations reached
+            while (hasNewAssignments && iteration < maxIterations) {
+                iteration++;
 
-                // Find fields that are hidden and have values
-                result.hiddenFields.forEach((fieldId) => {
-                    if (currentValues[fieldId] !== undefined && currentValues[fieldId] !== null && currentValues[fieldId] !== '') {
-                        fieldsToClear[fieldId] = undefined;
-                    }
+                // Get current form values for this iteration
+                const currentValues = providedDataValues || form.getFieldsValue();
+
+                const result = basicRules.executeRules(currentValues);
+
+                console.log(`   Iteration ${iteration}:`, {
+                    assignments: Object.keys(result.assignments).length,
+                    hiddenFields: result.hiddenFields.size,
+                    errors: result.errors.length,
                 });
 
-                // Clear from form
-                if (Object.keys(fieldsToClear).length > 0) {
-                    form.setFieldsValue(fieldsToClear);
-                    console.log("🧹 Cleared hidden fields from form:", Object.keys(fieldsToClear));
+                // Clear hidden fields if needed
+                if (clearHiddenFields && result.hiddenFields.size > 0) {
+                    const fieldsToClear: Record<string, any> = {};
+                    result.hiddenFields.forEach((fieldId) => {
+                        if (
+                            currentValues[fieldId] !== undefined &&
+                            currentValues[fieldId] !== null &&
+                            currentValues[fieldId] !== ""
+                        ) {
+                            fieldsToClear[fieldId] = undefined;
+                        }
+                    });
 
-                    // Persist clearing to Dexie
-                    if (onAssignments) {
-                        try {
-                            await onAssignments(fieldsToClear);
-                            console.log("✅ Hidden fields cleared from Dexie");
-                        } catch (error) {
-                            console.error("❌ Failed to clear hidden fields from Dexie:", error);
+                    if (Object.keys(fieldsToClear).length > 0) {
+                        form.setFieldsValue(fieldsToClear);
+                        if (onAssignments) {
+                            try {
+                                await onAssignments(fieldsToClear);
+                            } catch (error) {
+                                console.error(
+                                    "Failed to clear hidden fields from Dexie:",
+                                    error,
+                                );
+                            }
                         }
                     }
                 }
-            }
 
-            // Apply assignments to form
-            if (
-                applyAssignmentsToForm &&
-                Object.keys(result.assignments).length > 0
-            ) {
-                form.setFieldsValue(result.assignments);
-            }
+                // Check if there are new assignments
+                if (Object.keys(result.assignments).length === 0) {
+                    hasNewAssignments = false;
+                    console.log("✅ No more assignments, stopping cascade");
+                    break;
+                }
 
-            // Persist assignments to Dexie
-            if (
-                persistAssignments &&
-                onAssignments &&
-                Object.keys(result.assignments).length > 0
-            ) {
-                try {
-                    await onAssignments(result.assignments);
-                    console.log(
-                        "✅ Program rule assignments persisted to Dexie",
-                    );
-                } catch (error) {
-                    console.error("❌ Failed to persist assignments:", error);
+                // Merge assignments
+                allAssignments = { ...allAssignments, ...result.assignments };
+
+                // Apply assignments to form
+                if (applyAssignmentsToForm) {
+                    form.setFieldsValue(result.assignments);
+                }
+
+                // Persist assignments
+                if (persistAssignments && onAssignments) {
+                    try {
+                        await onAssignments(result.assignments);
+                    } catch (error) {
+                        console.error("Failed to persist assignments:", error);
+                    }
+                }
+
+                // Check if we should continue - only if we have new assignments that might trigger more rules
+                const assignmentKeys = Object.keys(result.assignments);
+                if (assignmentKeys.length === 0) {
+                    hasNewAssignments = false;
                 }
             }
+
+            if (iteration >= maxIterations) {
+                console.warn(`⚠️ Reached max iterations (${maxIterations}) for cascading rules`);
+            } else {
+                console.log(`✅ Cascading complete after ${iteration} iteration(s)`);
+            }
+
+            return allAssignments;
         },
         [
             basicRules,
@@ -296,62 +318,70 @@ export const useProgramRulesWithDexie = ({
         ],
     );
 
+    // Override triggerAutoExecute to use executeAndApplyRules instead of executeRules
+    const lastExecutedValuesRef = useRef<string>("");
+    const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+    const triggerAutoExecuteWithDexie = useCallback(() => {
+        if (!autoExecute) return;
+
+        const dataValues = form.getFieldsValue();
+        // For registration, attributes come from form values
+        // For events, attributes come from trackedEntityAttributes
+        const attributeValues = isRegistration ? dataValues : trackedEntityAttributes;
+
+        const valuesString = JSON.stringify({
+            data: dataValues,
+            attributes: attributeValues,
+            enrollment,
+        });
+
+        // Skip if values haven't changed
+        if (lastExecutedValuesRef.current === valuesString) {
+            return;
+        }
+
+        console.log("🔄 Auto-executing program rules (with Dexie)", {
+            isRegistration,
+            dataValuesCount: Object.keys(dataValues).length,
+            attributeValuesCount: Object.keys(attributeValues).length,
+            hasChanges: lastExecutedValuesRef.current !== valuesString
+        });
+
+        lastExecutedValuesRef.current = valuesString;
+
+        // Clear existing timer
+        if (timerRef.current) {
+            clearTimeout(timerRef.current);
+        }
+
+        // Start debounce timer
+        timerRef.current = setTimeout(() => {
+            executeAndApplyRules();
+        }, debounceMs);
+    }, [autoExecute, form, isRegistration, trackedEntityAttributes, enrollment, executeAndApplyRules, debounceMs]);
+
     return {
         ...basicRules,
         executeAndApplyRules,
+        triggerAutoExecute: triggerAutoExecuteWithDexie, // Override with Dexie-aware version
     };
 };
-
-/**
- * useFieldVisibility Hook
- *
- * Determines if a field should be visible based on program rules.
- * Simple helper for conditional rendering.
- *
- * Usage:
- * ```typescript
- * const isVisible = useFieldVisibility(dataElementId, ruleResult);
- *
- * if (!isVisible) {
- *     return null;
- * }
- * ```
- */
 
 export function useFieldVisibility(
     fieldId: string,
     ruleResult: ProgramRuleResult,
 ): boolean {
     return useMemo(() => {
-        // Hidden by rule
         if (ruleResult.hiddenFields.has(fieldId)) {
             return false;
         }
-
-        // Shown by rule (overrides default visibility)
         if (ruleResult.shownFields.has(fieldId)) {
             return true;
         }
-
-        // Default visibility
         return true;
     }, [fieldId, ruleResult]);
 }
-
-/**
- * useSectionVisibility Hook
- *
- * Determines if a section should be visible based on program rules.
- *
- * Usage:
- * ```typescript
- * const isVisible = useSectionVisibility(sectionId, ruleResult);
- *
- * if (!isVisible) {
- *     return null;
- * }
- * ```
- */
 
 export function useSectionVisibility(
     sectionId: string,
@@ -378,25 +408,19 @@ export function useFilteredOptions<T extends { id: string }>(
     return useMemo(() => {
         const hiddenOptions = ruleResult.hiddenOptions[fieldId];
         const shownOptions = ruleResult.shownOptions[fieldId];
-
-        // If no rules affect this field, return all options
         if (!hiddenOptions && !shownOptions) {
             return allOptions;
         }
 
-        // Filter based on rules
         return allOptions.filter((option) => {
-            // If explicitly hidden
             if (hiddenOptions?.has(option.id)) {
                 return false;
             }
 
-            // If shown options specified, only show those
             if (shownOptions && shownOptions.size > 0) {
                 return shownOptions.has(option.id);
             }
 
-            // Default: show
             return true;
         });
     }, [fieldId, allOptions, ruleResult]);

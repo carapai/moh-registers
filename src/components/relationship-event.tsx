@@ -1,21 +1,15 @@
 import { Tabs } from "antd";
 import dayjs from "dayjs";
+import { useLiveQuery } from "dexie-react-hooks";
 import React from "react";
-import { TrackerContext } from "../machines/tracker";
-import { BasicTrackedEntity } from "../schemas";
+import { populateRelationshipsForEntity } from "../db/operations";
+import { FlattenedTrackedEntity, BasicTrackedEntity } from "../db";
 import Relation from "./relation";
 
-// Helper function to get child label from attributes
 const getChildLabel = (child: BasicTrackedEntity): string => {
-    // Try to get child name attribute (P6Kp91wfCWy is child name ID)
-    const nameAttr = child.attributes?.find?.(
-        (a) => a.attribute === "P6Kp91wfCWy",
-    );
-
-    // Try to get birth date attribute (Y3DE5CZWySr is birth date ID)
-    const birthDateAttr = child.attributes?.find?.(
-        (a) => a.attribute === "Y3DE5CZWySr",
-    );
+    const attributes = Array.isArray(child.attributes) ? child.attributes : [];
+    const nameAttr = attributes.find((a) => a.attribute === "P6Kp91wfCWy");
+    const birthDateAttr = attributes.find((a) => a.attribute === "Y3DE5CZWySr");
 
     if (nameAttr?.value) {
         return nameAttr.value;
@@ -25,25 +19,49 @@ const getChildLabel = (child: BasicTrackedEntity): string => {
         return `Born ${dayjs(birthDateAttr.value).format("MMM DD, YYYY")}`;
     }
 
-    // Fallback to creation date
     return `Child ${dayjs(child.createdAt).format("MMM DD")}`;
 };
 
-export default function RelationshipEvent({ section }: { section: string }) {
-    const relationships = TrackerContext.useSelector(
-        (state) => state.context.trackedEntity.relationships,
-    );
+export default function RelationshipEvent({
+    section,
+    trackedEntity,
+}: {
+    section: string;
+    trackedEntity: FlattenedTrackedEntity;
+}) {
+    // Load relationships from DexieDB
+    const relationships = useLiveQuery(async () => {
+        if (!trackedEntity.trackedEntity) return [];
+
+        try {
+            return await populateRelationshipsForEntity(
+                trackedEntity.trackedEntity,
+            );
+        } catch (error) {
+            console.error("Failed to load relationships:", error);
+            return [];
+        }
+    }, [trackedEntity.trackedEntity]);
+
+    if (!relationships || relationships.length === 0) {
+        return null;
+    }
 
     return (
         <Tabs
             items={relationships.map((relationship) => {
+                const child = (relationship.to as any)
+                    .trackedEntity as BasicTrackedEntity;
+
                 return {
                     key: relationship.relationship,
-                    label: getChildLabel(relationship.to.trackedEntity),
+                    label: getChildLabel(child),
+                    destroyInactiveTabPane: false, // Keep tabs mounted for program rules
                     children: (
                         <Relation
+                            key={child.trackedEntity}
                             section={section}
-                            child={relationship.to.trackedEntity}
+                            child={child}
                         />
                     ),
                 };

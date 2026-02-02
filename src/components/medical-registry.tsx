@@ -21,7 +21,7 @@ import {
     Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import React from "react";
+import React, { useState } from "react";
 import { FlattenedTrackedEntity } from "../db";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
@@ -34,8 +34,8 @@ const { Content } = Layout;
 const { Title, Text } = Typography;
 
 const MedicalRegistry: React.FC = () => {
+    const [isModalOpen, setIsModalOpen] = useState(false);
     const [form] = Form.useForm();
-
     const { program, trackedEntityAttributes, optionSets } =
         RootRoute.useLoaderData();
     const { total, enrollments, appointments } =
@@ -171,9 +171,9 @@ const MedicalRegistry: React.FC = () => {
             <Row gutter={[8, 8]}>
                 <Col xs={24} lg={8}>
                     <Card
-                        title={<Title level={4}>Search patient</Title>}
+                        title={<Title level={4}>Search clients</Title>}
                         variant="borderless"
-                        style={{ height: "100%" }}
+                        style={{ height: "100%" }}  
                     >
                         <Form
                             form={form}
@@ -209,9 +209,12 @@ const MedicalRegistry: React.FC = () => {
                                                 warnings={[]}
                                                 errors={[]}
                                                 required={false}
-                                                span={24}
+                                                xs={24}
+                                                sm={24}
+                                                md={24}
+                                                lg={24}
+                                                xl={24}
                                                 form={form}
-                                                onTriggerProgramRules={() => {}}
                                                 onAutoSave={() => {}}
                                             />
                                         );
@@ -239,7 +242,7 @@ const MedicalRegistry: React.FC = () => {
                         <Col xs={24} sm={8}>
                             <Card variant="borderless">
                                 <Statistic
-                                    title="Total Patients"
+                                    title="Total Clients"
                                     value={total}
                                     prefix={<UserOutlined />}
                                     styles={{
@@ -288,7 +291,6 @@ const MedicalRegistry: React.FC = () => {
                                             .flatMap((v) => (v ? [v] : []))
                                             .join(", ")}'`}
                                     </Text>
-                                    <TrackerRegistration />
                                 </Space>
                             }
                         >
@@ -298,7 +300,7 @@ const MedicalRegistry: React.FC = () => {
                                 style={{ width: "100%" }}
                             >
                                 <Text type="secondary">
-                                    {trackedEntities.length} patients found (5
+                                    {trackedEntities.length} clients found (5
                                     of {total} total)
                                 </Text>
 
@@ -331,6 +333,12 @@ const MedicalRegistry: React.FC = () => {
                     )}
                 </Col>
             </Row>
+            <TrackerRegistration
+                isModalOpen={isModalOpen}
+                setIsModalOpen={setIsModalOpen}
+                modalTitle="Client Registration"
+                submitButtonText="Register Client"
+            />
         </Content>
     );
 };

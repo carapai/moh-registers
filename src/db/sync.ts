@@ -773,6 +773,10 @@ export class SyncManager {
 
         const allAttributes = Object.entries(attributes).flatMap(
             ([attribute, value]: [string, any]) => {
+                // Filter out internal fields that are not real DHIS2 attributes
+                if (attribute === "TRACKER_ID" || attribute === "ENROLLED_AT") {
+                    return [];
+                }
                 if (value !== undefined && value !== null && value !== "") {
                     return { attribute, value };
                 }
@@ -828,6 +832,10 @@ export class SyncManager {
 
         const allAttributes = Object.entries(attributes).flatMap(
             ([attribute, value]: [string, any]) => {
+                // Filter out internal fields that are not real DHIS2 attributes
+                if (attribute === "TRACKER_ID" || attribute === "ENROLLED_AT") {
+                    return [];
+                }
                 if (value !== undefined && value !== null && value !== "") {
                     return { attribute, value };
                 }

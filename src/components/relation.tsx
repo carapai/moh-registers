@@ -1,12 +1,12 @@
-import { Form, Row } from "antd";
+import { Form, Row, Typography } from "antd";
 import { useLiveQuery } from "dexie-react-hooks";
-import React, { useCallback, useEffect } from "react";
-import { db } from "../db";
-import { useDexieEventForm } from "../hooks/useDexieEventForm";
+import React, { useCallback } from "react";
+import { db, BasicTrackedEntity } from "../db";
+import { useDexiePersistence } from "../hooks/useDexiePersistence";
+import { useTrackerFormInit } from "../hooks/useTrackerFormInit";
 import { useProgramRulesWithDexie } from "../hooks/useProgramRules";
 import { TrackerContext } from "../machines/tracker";
 import { RootRoute } from "../routes/__root";
-import { BasicTrackedEntity } from "../schemas";
 import { calculateColSpan } from "../utils/utils";
 import { DataElementField } from "./data-element-field";
 
@@ -44,15 +44,27 @@ export default function Relation({
         ({ name }) => name === "Child Health Services",
     );
 
-    const childEvent = TrackerContext.useSelector(
-        (state) => state.context.childEvent,
-    );
+    // Query for child event
+    const childEvent = useLiveQuery(async () => {
+        if (!child.enrollments?.[0]?.enrollment || !mainEventId) return null;
 
-    const { updateDataValue, updateDataValues } = useDexieEventForm({
-        currentEvent: childEvent,
+        const existingEvent = await db.events
+            .where("enrollment")
+            .equals(child.enrollments[0].enrollment)
+            .and((e) => e.programStage === "K2nxbE9ubSs")
+            .first();
+
+        return existingEvent || null;
+    }, [child.enrollments?.[0]?.enrollment, mainEventId]);
+
+    // Use unified persistence hook
+    const { updateField, updateFields } = useDexiePersistence({
+        entityType: "event",
+        entityId: childEvent?.event || null,
     });
 
-    const { ruleResult, executeAndApplyRules } = useProgramRulesWithDexie({
+    // Use program rules with autoExecute enabled
+    const { ruleResult, executeAndApplyRules, triggerAutoExecute } = useProgramRulesWithDexie({
         form: childEventForm,
         programRules,
         programRuleVariables,
@@ -65,10 +77,30 @@ export default function Relation({
             {} as Record<string, any>,
         ),
         enrollment: child.enrollments[0],
-        onAssignments: updateDataValues,
+        onAssignments: updateFields,
         applyAssignmentsToForm: true,
         persistAssignments: true,
         program: program.id,
+        autoExecute: true, // Enable automatic rule execution
+    });
+
+    // Wrap updateField to also trigger program rules
+    const updateFieldWithRules = useCallback((fieldId: string, value: any) => {
+        updateField(fieldId, value);
+        triggerAutoExecute();
+    }, [updateField, triggerAutoExecute]);
+
+    // Use unified form initialization hook
+    useTrackerFormInit({
+        form: childEventForm,
+        entity: childEvent,
+        initialValues: {
+            UuxHHVp5CnF: section === "Maternity" ? "Newborn" : "Postnatal",
+            mrKZWf2WMIC: "Child Health Services",
+            occurredAt,
+        },
+        executeRules: executeAndApplyRules,
+        enabled: !!mainEvent,
     });
 
     const currentDataElements = new Map(
@@ -82,45 +114,16 @@ export default function Relation({
             },
         ]),
     );
-    const handleTriggerProgramRules = useCallback(() => {
-        executeAndApplyRules();
-    }, [executeAndApplyRules]);
-
-    useEffect(() => {
-        if (!child.enrollments || child.enrollments.length === 0) {
-            return;
-        }
-        if (!childEvent || !mainEvent) return;
-
-        const initializeChildEvent = async () => {
-            const initialDataValues = {
-                ...childEvent.dataValues,
-                UuxHHVp5CnF: section === "Maternity" ? "Newborn" : "Postnatal",
-                mrKZWf2WMIC: "Child Health Services",
-                occurredAt,
-            };
-
-            await updateDataValues(initialDataValues);
-
-            executeAndApplyRules(initialDataValues);
-        };
-
-        initializeChildEvent();
-    }, [childEvent?.event, section]);
 
     return (
         <Form
             form={childEventForm}
             layout="vertical"
-            // onFinish={onVisitSubmit}
             style={{ margin: 0, padding: 0 }}
-            initialValues={{
-                ...childEvent?.dataValues,
-                occurredAt,
-                UuxHHVp5CnF: section === "Maternity" ? "Newborn" : "Postnatal",
-                mrKZWf2WMIC: "Child Health Services",
-            }}
         >
+            <Typography.Title level={4} style={{ marginBottom: 16 }}>
+                {section} for {child.trackedEntity}
+            </Typography.Title>
             <Row gutter={24}>
                 {currentSection.dataElements.flatMap((dataElement) => {
                     const currentDataElement = dataElements.get(dataElement.id);
@@ -185,8 +188,7 @@ export default function Relation({
                             required={compulsory}
                             key={dataElement.id}
                             form={childEventForm}
-                            onTriggerProgramRules={handleTriggerProgramRules}
-                            onAutoSave={updateDataValue}
+                            onAutoSave={updateFieldWithRules}
                             span={calculateColSpan(
                                 currentSection.dataElements.length,
                                 6,

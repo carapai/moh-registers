@@ -4,11 +4,10 @@ import { createRootRouteWithContext, Outlet } from "@tanstack/react-router";
 import React, { useMemo, useState } from "react";
 
 import {
-    FileTextOutlined,
-    HomeOutlined,
-    MoreOutlined,
+	HomeOutlined,
+	MoreOutlined
 } from "@ant-design/icons";
-import { Button, Layout, Space, Tooltip, Typography } from "antd";
+import { Button, Layout, Space, Typography } from "antd";
 import { createMetadataSync } from "../db/metadata-sync";
 
 const { Header } = Layout;
@@ -17,7 +16,6 @@ const { Title, Text } = Typography;
 import { Flex } from "antd";
 import useApp from "antd/es/app/useApp";
 import { groupBy } from "lodash";
-import { DraftRecovery } from "../components/draft-recovery";
 import MetadataSyncComponent from "../components/metadata-sync";
 import { SyncErrorBoundary } from "../components/sync-error-boundary";
 import { SyncStatus } from "../components/sync-status";
@@ -26,13 +24,13 @@ import { createSyncManager } from "../db/sync";
 import { TrackerContext } from "../machines/tracker";
 import { resourcesQueryOptions } from "../query-options";
 import {
-    DataElement,
-    OrgUnit,
-    Program,
-    ProgramRule,
-    ProgramRuleVariable,
-    RelationshipType,
-    TrackedEntityAttribute,
+	DataElement,
+	OrgUnit,
+	Program,
+	ProgramRule,
+	ProgramRuleVariable,
+	RelationshipType,
+	TrackedEntityAttribute,
 } from "../schemas";
 
 const queryInfo = async (
@@ -92,220 +90,6 @@ const queryInfo = async (
     };
 };
 
-// Legacy implementation - kept for reference but not used
-// Can be removed in future cleanup
-const _queryInfoLegacy_UNUSED = async (
-    queryClient: QueryClient,
-    engine: ReturnType<typeof useDataEngine>,
-) => {
-    const prevDataElements = await db.dataElements.count();
-    const prevAttributes = await db.trackedEntityAttributes.count();
-    const prevProgramRules = await db.programRules.count();
-    const prevProgramRuleVariables = await db.programRuleVariables.count();
-    const prevOptionGroups = await db.optionGroups.count();
-    const prevOptionSets = await db.optionSets.count();
-    const prevPrograms = await db.programs.count();
-    const prevVillages = await db.villages.count();
-    const prevRelationshipTypes = await db.relationshipTypes.count();
-
-    if (
-        prevDataElements === 0 ||
-        prevAttributes === 0 ||
-        prevProgramRules === 0 ||
-        prevProgramRuleVariables === 0 ||
-        prevOptionGroups === 0 ||
-        prevOptionSets === 0 ||
-        prevPrograms === 0 ||
-        prevVillages === 0 ||
-        prevRelationshipTypes === 0
-    ) {
-        const [
-            villages,
-            program,
-            { optionSets },
-            { dataElements },
-            { trackedEntityAttributes },
-            { programRules },
-            { programRuleVariables },
-            { optionGroups },
-            relationshipType,
-        ] = (await queryClient.ensureQueryData(
-            resourcesQueryOptions({
-                engine,
-                queries: {
-                    villages: {
-                        resource: "dataStore/registers",
-                        id: "villages",
-                    },
-                    program: {
-                        resource: "programs",
-                        id: "ueBhWkWll5v",
-                        params: {
-                            fields: "id,name,programSections[id,name,sortOrder,trackedEntityAttributes[id]],trackedEntityType[id,trackedEntityTypeAttributes[id]],programType,selectEnrollmentDatesInFuture,selectIncidentDatesInFuture,organisationUnits[id,name],programStages[id,repeatable,name,code,programStageDataElements[id,compulsory,renderOptionsAsRadio,dataElement[id],renderType,allowFutureDate],programStageSections[id,name,sortOrder,dataElements[id]]],programTrackedEntityAttributes[id,mandatory,searchable,renderOptionsAsRadio,renderType,sortOrder,allowFutureDate,displayInList,trackedEntityAttribute[id]]",
-                        },
-                    },
-                    optionSets: {
-                        resource: "optionSets",
-                        params: {
-                            fields: "id,options[id,name,code]",
-                            paging: false,
-                        },
-                    },
-                    dataElements: {
-                        resource: "dataElements",
-                        params: {
-                            fields: "id,name,code,valueType,formName,optionSetValue,optionSet[id]",
-                            paging: false,
-                        },
-                    },
-                    trackedEntityAttributes: {
-                        resource: "trackedEntityAttributes",
-                        params: {
-                            fields: "id,name,code,unique,generated,pattern,confidential,valueType,optionSetValue,displayFormName,formName,optionSet[id]",
-                            paging: false,
-                        },
-                    },
-                    programRules: {
-                        resource: `programRules.json`,
-                        params: {
-                            filter: "program.id:eq:ueBhWkWll5v",
-                            fields: "*,programRuleActions[*]",
-                            paging: false,
-                        },
-                    },
-                    programRuleVariables: {
-                        resource: `programRuleVariables.json`,
-                        params: {
-                            filter: "program.id:eq:ueBhWkWll5v",
-                            fields: "*",
-                            paging: false,
-                        },
-                    },
-                    optionGroups: {
-                        resource: "optionGroups",
-                        params: {
-                            fields: "id,options[id,name,code]",
-                            paging: false,
-                        },
-                    },
-                    motherChildRelationship: {
-                        resource: "relationshipTypes",
-                        id: "vDnDNhGRzzy",
-                    },
-                },
-            }),
-        )) as [
-            Village[],
-            Program,
-            {
-                optionSets: {
-                    id: string;
-                    options: { id: string; name: string; code: string }[];
-                }[];
-            },
-            { dataElements: DataElement[] },
-            {
-                trackedEntityAttributes: TrackedEntityAttribute[];
-            },
-            { programRules: ProgramRule[] },
-            {
-                programRuleVariables: ProgramRuleVariable[];
-            },
-            {
-                optionGroups: Array<{
-                    id: string;
-                    options: {
-                        id: string;
-                        name: string;
-                        code: string;
-                    }[];
-                }>;
-            },
-            RelationshipType,
-        ];
-
-        const finalOptionGroups = optionGroups.flatMap((og) =>
-            og.options.map((o) => ({
-                ...o,
-                optionGroup: og.id,
-            })),
-        );
-        const finalOptionSets = optionSets.flatMap((os) =>
-            os.options.map((o) => ({
-                ...o,
-                optionSet: os.id,
-            })),
-        );
-        await db.programs.put(program);
-        await db.dataElements.bulkPut(dataElements);
-        await db.trackedEntityAttributes.bulkPut(trackedEntityAttributes);
-        await db.programRules.bulkPut(programRules);
-        await db.programRuleVariables.bulkPut(programRuleVariables);
-        await db.optionGroups.bulkPut(finalOptionGroups);
-        await db.optionSets.bulkPut(finalOptionSets);
-        await db.villages.bulkPut(villages);
-        await db.relationshipTypes.put(relationshipType);
-        return {
-            dataElements: new Map(dataElements.map((de) => [de.id, de])),
-            trackedEntityAttributes: new Map(
-                trackedEntityAttributes.map((ta) => [ta.id, ta]),
-            ),
-            programRules: programRules,
-            programRuleVariables: programRuleVariables,
-            optionGroups: new Map(
-                Object.entries(groupBy(finalOptionGroups, "optionGroup")).map(
-                    ([id, og]) => [id, og],
-                ),
-            ),
-            optionSets: new Map(
-                Object.entries(groupBy(finalOptionSets, "optionSet")).map(
-                    ([id, os]) => [id, os],
-                ),
-            ),
-            programOrgUnits: new Set(
-                program.organisationUnits.map(({ id }) => id),
-            ),
-            program,
-            villages,
-            motherChildRelation: relationshipType,
-        };
-    }
-
-    const dataElements = await db.dataElements.toArray();
-    const trackedEntityAttributes = await db.trackedEntityAttributes.toArray();
-    const programRules = await db.programRules.toArray();
-    const programRuleVariables = await db.programRuleVariables.toArray();
-    const optionGroups = await db.optionGroups.toArray();
-    const optionSets = await db.optionSets.toArray();
-    const [program] = await db.programs.toArray();
-    const villages = await db.villages.toArray();
-    const [motherChildRelation] = await db.relationshipTypes.toArray();
-
-    return {
-        dataElements: new Map(dataElements.map((de) => [de.id, de])),
-        trackedEntityAttributes: new Map(
-            trackedEntityAttributes.map((ta) => [ta.id, ta]),
-        ),
-        programRules,
-        programRuleVariables,
-        optionGroups: new Map(
-            Object.entries(groupBy(optionGroups, "optionGroup")).map(
-                ([id, og]) => [id, og],
-            ),
-        ),
-        optionSets: new Map(
-            Object.entries(groupBy(optionSets, "optionSet")).map(([id, os]) => [
-                id,
-                os,
-            ]),
-        ),
-        program,
-        villages,
-        programOrgUnits: new Set(program.organisationUnits.map(({ id }) => id)),
-        motherChildRelation,
-    };
-};
-
 export const RootRoute = createRootRouteWithContext<{
     queryClient: QueryClient;
     engine: ReturnType<typeof useDataEngine>;
@@ -316,8 +100,6 @@ export const RootRoute = createRootRouteWithContext<{
         try {
             return await queryInfo(engine);
         } catch (error) {
-            console.error("Error loading metadata:", error);
-            // If metadata loading fails, try resetting the database and retrying
             await db.delete();
             await db.open();
             return await queryInfo(engine);
@@ -423,7 +205,7 @@ function LayoutWithDrafts({
                         />
                         <Text strong>{orgUnit.name}</Text>
                         <Button type="text" icon={<MoreOutlined />} />
-                        <Tooltip title="Recover saved drafts">
+                        {/* <Tooltip title="Recover saved drafts">
                             <Button
                                 icon={<FileTextOutlined />}
                                 onClick={() => {
@@ -435,7 +217,7 @@ function LayoutWithDrafts({
                             >
                                 Drafts
                             </Button>
-                        </Tooltip>
+                        </Tooltip> */}
                         <MetadataSyncComponent metadataSync={metadataSync} />
                         <SyncStatus />
                     </Space>
@@ -443,11 +225,11 @@ function LayoutWithDrafts({
 
                 <Outlet />
             </Layout>
-            <DraftRecovery
+            {/* <DraftRecovery
                 visible={draftModalVisible}
                 onClose={() => setDraftModalVisible(false)}
                 onRecover={handleDraftRecover}
-            />
+            /> */}
         </>
     );
 }
